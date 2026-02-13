@@ -19,7 +19,7 @@ Stream USB, RTSP, ONVIF, and HTTP cameras through a unified web interface. Deplo
 ## 🚀 Quick Install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/curatelearn-dev/falcon-eye/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh | bash
 ```
 
 ### Prerequisites
@@ -41,7 +41,7 @@ If you prefer manual installation:
 
 ```bash
 # Clone the repository
-git clone https://github.com/curatelearn-dev/falcon-eye.git
+git clone https://github.com/Amazingct/falcon-eye.git
 cd falcon-eye
 
 # Create namespace
@@ -201,4 +201,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-Made with ❤️ by [CurateLearn](https://github.com/curatelearn-dev)
+Made with ❤️ by [CurateLearn](https://github.com/Amazingct)

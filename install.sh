@@ -13,7 +13,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 NAMESPACE="falcon-eye"
-RELEASE_URL="https://raw.githubusercontent.com/curatelearn-dev/falcon-eye/main"
+REPO_OWNER="${FALCON_EYE_OWNER:-amazingct}"  # Can override with env var
+REGISTRY="ghcr.io"
+RELEASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main"
 
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════╗"
@@ -194,7 +196,7 @@ spec:
       serviceAccountName: falcon-eye-sa
       containers:
       - name: api
-        image: ghcr.io/curatelearn-dev/falcon-eye-api:latest
+        image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
@@ -279,7 +281,7 @@ spec:
     spec:
       containers:
       - name: dashboard
-        image: ghcr.io/curatelearn-dev/falcon-eye-dashboard:latest
+        image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-dashboard:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 80
