@@ -42,7 +42,7 @@ class Camera(Base):
     status = Column(String(50), default=CameraStatus.PENDING.value, index=True)
     resolution = Column(String(20), default="640x480")
     framerate = Column(Integer, default=15)
-    metadata = Column(JSON, default=dict)
+    extra_data = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -63,7 +63,7 @@ class Camera(Base):
             "status": self.status,
             "resolution": self.resolution,
             "framerate": self.framerate,
-            "metadata": self.metadata,
+            "extra_data": self.extra_data,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
