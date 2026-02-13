@@ -243,7 +243,7 @@ spec:
   ports:
   - port: 3000
     targetPort: 3000
-    nodePort: 30881
+    nodePort: 30901
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -333,7 +333,7 @@ spec:
   ports:
   - port: 80
     targetPort: 80
-    nodePort: 30880
+    nodePort: 30900
 EOF
     
     echo -e "${GREEN}✓ Dashboard configured${NC}"
@@ -376,8 +376,8 @@ print_access_info() {
     fi
     
     echo -e "${YELLOW}Access URLs:${NC}"
-    echo -e "  📊 Dashboard:  http://${NODE_IP}:30880"
-    echo -e "  🔌 API:        http://${NODE_IP}:30881"
+    echo -e "  📊 Dashboard:  http://${NODE_IP}:30900"
+    echo -e "  🔌 API:        http://${NODE_IP}:30901"
     echo ""
     
     # Show pod status
@@ -445,8 +445,8 @@ show_status() {
     echo -e "${YELLOW}                        ACCESS URLS                         ${NC}"
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  📊 ${CYAN}Dashboard${NC}:  http://${NODE_IP}:30880"
-    echo -e "  🔌 ${CYAN}API${NC}:        http://${NODE_IP}:30881"
+    echo -e "  📊 ${CYAN}Dashboard${NC}:  http://${NODE_IP}:30900"
+    echo -e "  🔌 ${CYAN}API${NC}:        http://${NODE_IP}:30901"
     echo ""
     
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
