@@ -1,7 +1,8 @@
 #!/bin/bash
 #
 # Falcon-Eye Installer & Updater
-# One-line install/update: curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh | bash
+# Install/update: curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh | bash
+# Show status:    curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh | bash -s -- --status
 #
 set -e
 
@@ -410,6 +411,85 @@ print_access_info() {
     echo ""
 }
 
+# Show status only
+show_status() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║                 🦅 FALCON-EYE STATUS                      ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    if ! command -v kubectl &> /dev/null; then
+        echo -e "${RED}✗ kubectl not found${NC}"
+        exit 1
+    fi
+    
+    if ! kubectl get namespace ${NAMESPACE} &> /dev/null; then
+        echo -e "${RED}✗ Falcon-Eye is not installed${NC}"
+        echo ""
+        echo "Install with:"
+        echo "  curl -sSL https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main/install.sh | bash"
+        exit 1
+    fi
+    
+    # Get node IP
+    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
+    if [ -z "$NODE_IP" ]; then
+        NODE_IP="<node-ip>"
+    fi
+    
+    echo -e "${GREEN}✓ Falcon-Eye is installed${NC}"
+    echo ""
+    
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}                        ACCESS URLS                         ${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  📊 ${CYAN}Dashboard${NC}:  http://${NODE_IP}:30800"
+    echo -e "  🔌 ${CYAN}API${NC}:        http://${NODE_IP}:30850"
+    echo ""
+    
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}                        POD STATUS                          ${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
+    echo ""
+    kubectl get pods -n ${NAMESPACE} --no-headers 2>/dev/null | while read line; do
+        POD_NAME=$(echo $line | awk '{print $1}')
+        POD_STATUS=$(echo $line | awk '{print $3}')
+        POD_READY=$(echo $line | awk '{print $2}')
+        POD_AGE=$(echo $line | awk '{print $5}')
+        if [ "$POD_STATUS" = "Running" ]; then
+            echo -e "  ${GREEN}●${NC} ${POD_NAME}"
+            echo -e "    Status: ${GREEN}${POD_STATUS}${NC} | Ready: ${POD_READY} | Age: ${POD_AGE}"
+        else
+            echo -e "  ${YELLOW}●${NC} ${POD_NAME}"
+            echo -e "    Status: ${YELLOW}${POD_STATUS}${NC} | Ready: ${POD_READY} | Age: ${POD_AGE}"
+        fi
+    done
+    echo ""
+    
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}                         IMAGES                             ${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
+    echo ""
+    API_IMAGE=$(kubectl get deployment falcon-eye-api -n ${NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "not deployed")
+    DASH_IMAGE=$(kubectl get deployment falcon-eye-dashboard -n ${NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "not deployed")
+    echo -e "  API:       ${API_IMAGE}"
+    echo -e "  Dashboard: ${DASH_IMAGE}"
+    echo ""
+    
+    echo -e "${YELLOW}Quick Commands:${NC}"
+    echo "  # Update to latest"
+    echo "  curl -sSL https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main/install.sh | bash"
+    echo ""
+    echo "  # View logs"
+    echo "  kubectl logs -n ${NAMESPACE} -l app=falcon-eye-api -f"
+    echo ""
+    echo "  # Uninstall"
+    echo "  kubectl delete namespace ${NAMESPACE}"
+    echo ""
+}
+
 # Main installation flow
 main() {
     check_prerequisites
@@ -423,5 +503,27 @@ main() {
     print_access_info
 }
 
-# Run
-main "$@"
+# Parse arguments
+case "${1:-}" in
+    --status|-s|status)
+        show_status
+        ;;
+    --help|-h|help)
+        echo "Falcon-Eye Installer"
+        echo ""
+        echo "Usage:"
+        echo "  install.sh           Install or upgrade Falcon-Eye"
+        echo "  install.sh --status  Show current status and URLs"
+        echo "  install.sh --help    Show this help"
+        echo ""
+        echo "Examples:"
+        echo "  # Install/upgrade"
+        echo "  curl -sSL https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main/install.sh | bash"
+        echo ""
+        echo "  # Check status"
+        echo "  curl -sSL https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main/install.sh | bash -s -- --status"
+        ;;
+    *)
+        main
+        ;;
+esac
