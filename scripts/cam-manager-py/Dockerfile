@@ -31,18 +31,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH
+# Create non-root user first
+RUN useradd -m -u 1001 falcon
+
+# Copy Python packages from builder to falcon user's local
+COPY --from=builder /root/.local /home/falcon/.local
+RUN chown -R falcon:falcon /home/falcon/.local
 
 # Copy application
 COPY app/ ./app/
-
-# Create non-root user
-RUN useradd -m -u 1001 falcon && \
-    chown -R falcon:falcon /app
+RUN chown -R falcon:falcon /app
 
 USER falcon
+
+# Set PATH for falcon user
+ENV PATH=/home/falcon/.local/bin:$PATH
 
 # Environment defaults
 ENV PYTHONUNBUFFERED=1 \
