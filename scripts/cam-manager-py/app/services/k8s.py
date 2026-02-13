@@ -217,3 +217,67 @@ async def get_deployment_status(deployment_name: str) -> Optional[dict]:
         if e.status == 404:
             return None
         raise
+
+
+class K8sService:
+    """Kubernetes service wrapper for async operations"""
+    
+    async def get_nodes(self) -> list[dict]:
+        """Get all cluster nodes"""
+        try:
+            nodes = core_api.list_node()
+            result = []
+            for node in nodes.items:
+                # Get node IP
+                internal_ip = None
+                for addr in node.status.addresses:
+                    if addr.type == "InternalIP":
+                        internal_ip = addr.address
+                        break
+                
+                # Get node status
+                ready = False
+                for condition in node.status.conditions:
+                    if condition.type == "Ready":
+                        ready = condition.status == "True"
+                        break
+                
+                # Check for taints
+                taints = []
+                if node.spec.taints:
+                    taints = [{"key": t.key, "value": t.value, "effect": t.effect} for t in node.spec.taints]
+                
+                result.append({
+                    "name": node.metadata.name,
+                    "ip": internal_ip,
+                    "ready": ready,
+                    "taints": taints,
+                    "labels": node.metadata.labels or {},
+                    "architecture": node.status.node_info.architecture if node.status.node_info else None,
+                    "os": node.status.node_info.operating_system if node.status.node_info else None,
+                })
+            
+            return result
+        except ApiException as e:
+            logger.error(f"Error listing nodes: {e.reason}")
+            return []
+    
+    async def get_pods_by_label(self, label_selector: str) -> list[dict]:
+        """Get pods by label selector"""
+        try:
+            pods = core_api.list_namespaced_pod(
+                namespace=settings.k8s_namespace,
+                label_selector=label_selector,
+            )
+            return [
+                {
+                    "name": pod.metadata.name,
+                    "status": pod.status.phase,
+                    "node": pod.spec.node_name,
+                    "ip": pod.status.pod_ip,
+                }
+                for pod in pods.items
+            ]
+        except ApiException as e:
+            logger.error(f"Error listing pods: {e.reason}")
+            return []
