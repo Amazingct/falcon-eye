@@ -52,8 +52,9 @@ async def chat(request: ChatRequest):
     else:
         # Non-streaming response
         full_response = ""
-        async for chunk in stream_chat(messages):
-            full_response += chunk
+        async for event_type, data in stream_chat(messages):
+            if event_type == "text":
+                full_response += data
         
         return ChatResponse(
             message=Message(role="assistant", content=full_response)
