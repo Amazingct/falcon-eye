@@ -1,15 +1,21 @@
 """
-Chatbot API routes with SSE streaming
+Chatbot API routes with SSE streaming and session management
 """
 import json
 import asyncio
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from uuid import UUID
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete, update
+from datetime import datetime
 
 from app.chatbot.graph import stream_chat, create_graph
+from app.database import get_db
+from app.models.chat import ChatSession, ChatMessage
 
 router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
@@ -106,3 +112,259 @@ async def chat_health():
         "configured": bool(api_key),
         "model": "claude-sonnet-4-20250514",
     }
+
+
+# ============ Session Management ============
+
+class SessionCreate(BaseModel):
+    """Create session request"""
+    name: Optional[str] = None
+
+
+class SessionUpdate(BaseModel):
+    """Update session request"""
+    name: str
+
+
+class SessionChatRequest(BaseModel):
+    """Chat within a session"""
+    content: str
+    stream: bool = True
+
+
+def generate_session_name(messages: list[ChatMessage]) -> str:
+    """Generate a session name from the first few messages"""
+    if not messages:
+        return "New Chat"
+    
+    # Get first user message
+    user_msgs = [m for m in messages if m.role == "user"]
+    if not user_msgs:
+        return "New Chat"
+    
+    first_msg = user_msgs[0].content
+    # Truncate to ~40 chars at word boundary
+    if len(first_msg) <= 40:
+        return first_msg
+    
+    truncated = first_msg[:40]
+    last_space = truncated.rfind(" ")
+    if last_space > 20:
+        truncated = truncated[:last_space]
+    return truncated + "..."
+
+
+@router.get("/sessions")
+async def list_sessions(
+    limit: int = 50,
+    offset: int = 0,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all chat sessions"""
+    result = await db.execute(
+        select(ChatSession)
+        .order_by(ChatSession.updated_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    sessions = result.scalars().all()
+    
+    return {
+        "sessions": [s.to_dict() for s in sessions],
+        "count": len(sessions),
+    }
+
+
+@router.post("/sessions")
+async def create_session(
+    data: SessionCreate = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new chat session"""
+    session = ChatSession(
+        name=data.name if data and data.name else None,
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    
+    return session.to_dict()
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get a session with all messages"""
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return session.to_dict(include_messages=True)
+
+
+@router.patch("/sessions/{session_id}")
+async def update_session(
+    session_id: UUID,
+    data: SessionUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a session"""
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session.name = data.name
+    await db.commit()
+    await db.refresh(session)
+    
+    return session.to_dict()
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a session and all its messages"""
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    await db.execute(delete(ChatSession).where(ChatSession.id == session_id))
+    await db.commit()
+    
+    return {"message": "Session deleted", "id": str(session_id)}
+
+
+@router.post("/sessions/{session_id}/chat")
+async def chat_in_session(
+    session_id: UUID,
+    request: SessionChatRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Chat within a session (stores messages in DB)"""
+    # Get session
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Save user message
+    user_msg = ChatMessage(
+        session_id=session_id,
+        role="user",
+        content=request.content,
+    )
+    db.add(user_msg)
+    await db.commit()
+    
+    # Get all messages for context
+    msgs_result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at)
+    )
+    all_messages = msgs_result.scalars().all()
+    messages = [{"role": m.role, "content": m.content} for m in all_messages]
+    
+    if request.stream:
+        return EventSourceResponse(
+            stream_session_response(session_id, messages, db),
+            media_type="text/event-stream"
+        )
+    else:
+        # Non-streaming
+        full_response = ""
+        async for event_type, data in stream_chat(messages):
+            if event_type == "text":
+                full_response += data
+        
+        # Save assistant response
+        assistant_msg = ChatMessage(
+            session_id=session_id,
+            role="assistant",
+            content=full_response,
+        )
+        db.add(assistant_msg)
+        
+        # Auto-name session if not named and has 2+ messages
+        if not session.name and len(all_messages) >= 1:
+            all_msgs_for_name = list(all_messages) + [user_msg]
+            session.name = generate_session_name(all_msgs_for_name)
+        
+        await db.commit()
+        
+        return {"role": "assistant", "content": full_response}
+
+
+async def stream_session_response(session_id: UUID, messages: list[dict], db: AsyncSession):
+    """Stream response and save to DB"""
+    full_response = ""
+    
+    try:
+        async for event_type, data in stream_chat(messages):
+            if event_type == "text":
+                full_response += data
+                yield {
+                    "event": "message",
+                    "data": json.dumps({"content": data})
+                }
+            elif event_type == "thinking":
+                yield {
+                    "event": "thinking",
+                    "data": json.dumps({"status": "using_tools"})
+                }
+        
+        # Save assistant response to DB
+        assistant_msg = ChatMessage(
+            session_id=session_id,
+            role="assistant",
+            content=full_response,
+        )
+        db.add(assistant_msg)
+        
+        # Auto-name session if needed
+        result = await db.execute(
+            select(ChatSession).where(ChatSession.id == session_id)
+        )
+        session = result.scalar_one_or_none()
+        
+        if session and not session.name:
+            msgs_result = await db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id)
+                .order_by(ChatMessage.created_at)
+            )
+            all_messages = msgs_result.scalars().all()
+            if len(all_messages) >= 2:
+                session.name = generate_session_name(list(all_messages))
+        
+        await db.commit()
+        
+        yield {
+            "event": "done",
+            "data": json.dumps({"status": "complete"})
+        }
+        
+    except Exception as e:
+        yield {
+            "event": "error",
+            "data": json.dumps({"error": str(e)})
+        }
