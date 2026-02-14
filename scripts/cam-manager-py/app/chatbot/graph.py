@@ -213,20 +213,25 @@ async def stream_chat(
             tool_name = tc["name"]
             tool_args = tc["args"]
             
+            print(f"[Chatbot] Executing tool: {tool_name} with args: {tool_args}")
+            
             if tool_name in tools_by_name:
                 tool = tools_by_name[tool_name]
                 try:
                     result = tool.invoke(tool_args)
+                    print(f"[Chatbot] Tool {tool_name} result (first 200 chars): {str(result)[:200]}")
                     tool_results.append(ToolMessage(
                         content=str(result),
                         tool_call_id=tc["id"],
                     ))
                 except Exception as e:
+                    print(f"[Chatbot] Tool {tool_name} error: {e}")
                     tool_results.append(ToolMessage(
                         content=f"Error: {str(e)}",
                         tool_call_id=tc["id"],
                     ))
             else:
+                print(f"[Chatbot] Unknown tool: {tool_name}")
                 tool_results.append(ToolMessage(
                     content=f"Unknown tool: {tool_name}",
                     tool_call_id=tc["id"],
@@ -235,6 +240,9 @@ async def stream_chat(
         # Add tool interaction to messages
         lc_messages.append(ai_msg)
         lc_messages.extend(tool_results)
+        
+        print(f"[Chatbot] Sending {len(lc_messages)} messages to Claude for follow-up")
+        print(f"[Chatbot] Last message type: {type(lc_messages[-1]).__name__}")
         
         # Stream the final response with tool results
         async for chunk in llm.astream(lc_messages):
