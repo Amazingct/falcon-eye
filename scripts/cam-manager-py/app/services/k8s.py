@@ -86,14 +86,21 @@ def generate_deployment(camera: Camera) -> tuple[dict, str]:
             "hostPath": {"path": camera.device_path or "/dev/video0"},
         }]
     
-    # Add node selector and tolerations ONLY for USB cameras (they need specific nodes)
-    # Network cameras (rtsp, onvif, http) can run anywhere
+    # Add node selector and tolerations
+    # USB cameras MUST run on their specific node
+    # Network cameras use default node if set, otherwise auto-assign
+    camera_node = None
     if camera.protocol == "usb" and camera.node_name and camera.node_name != "LAN":
+        camera_node = camera.node_name
+    elif camera.protocol != "usb" and settings.default_camera_node:
+        camera_node = settings.default_camera_node
+    
+    if camera_node:
         deployment["spec"]["template"]["spec"]["nodeSelector"] = {
-            "kubernetes.io/hostname": camera.node_name,
+            "kubernetes.io/hostname": camera_node,
         }
         
-        if settings.is_jetson_node(camera.node_name):
+        if settings.is_jetson_node(camera_node):
             deployment["spec"]["template"]["spec"]["tolerations"] = [{
                 "key": "dedicated",
                 "operator": "Equal",
@@ -149,7 +156,7 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
                             {"name": "CAMERA_ID", "value": str(camera.id)},
                             {"name": "CAMERA_NAME", "value": camera.name},
                             {"name": "STREAM_URL", "value": stream_url},
-                            {"name": "API_URL", "value": "http://falcon-eye-api:3000"},
+                            {"name": "API_URL", "value": "http://falcon-eye-api:8000"},
                             {"name": "RECORDINGS_PATH", "value": "/recordings"},
                         ],
                         "volumeMounts": [{
@@ -172,6 +179,20 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
             },
         },
     }
+    
+    # Add nodeSelector for recorder if camera has node or default is set
+    recorder_node = camera.node_name if camera.node_name and camera.node_name != "LAN" else settings.default_recorder_node
+    if recorder_node:
+        deployment["spec"]["template"]["spec"]["nodeSelector"] = {
+            "kubernetes.io/hostname": recorder_node,
+        }
+        # Add toleration for Jetson nodes
+        if settings.is_jetson_node(recorder_node):
+            deployment["spec"]["template"]["spec"]["tolerations"] = [{
+                "key": "dedicated",
+                "value": "jetson",
+                "effect": "NoSchedule",
+            }]
     
     return deployment, deployment_name
 

@@ -196,6 +196,25 @@ detect_nodes() {
     echo ""
 }
 
+# Helper function to prompt for node selection
+select_node() {
+    local COMPONENT_NAME="$1"
+    local COMPONENT_DESC="$2"
+    local VAR_NAME="$3"
+    
+    echo -e "  ${CYAN}${COMPONENT_NAME}${NC} - ${COMPONENT_DESC}"
+    read -p "  Choose node [0-${NODE_COUNT}] (default: 0): " NODE_CHOICE
+    
+    if [ -n "$NODE_CHOICE" ] && [ "$NODE_CHOICE" != "0" ] && [ "$NODE_CHOICE" -le "$NODE_COUNT" ] 2>/dev/null; then
+        eval "${VAR_NAME}=\"${NODES[$((NODE_CHOICE-1))]}\""
+        eval "echo -e \"${GREEN}  ✓ ${COMPONENT_NAME}: \${${VAR_NAME}}${NC}\""
+    else
+        eval "${VAR_NAME}=\"\""
+        echo -e "${GREEN}  ✓ ${COMPONENT_NAME}: auto-assigned${NC}"
+    fi
+    echo ""
+}
+
 # Prompt for optional configuration
 configure_options() {
     # Skip prompts if running non-interactively or upgrading
@@ -206,16 +225,16 @@ configure_options() {
     echo -e "${YELLOW}[3.5/8] Optional Configuration...${NC}"
     echo ""
     
-    # Node selection for PostgreSQL
-    echo -e "  ${CYAN}Select node for PostgreSQL (database):${NC}"
-    echo -e "  PostgreSQL requires persistent storage - choose a reliable node."
-    echo ""
-    
     # Get nodes and display options
     NODES=($(kubectl get nodes --no-headers -o custom-columns=":metadata.name" 2>/dev/null))
     NODE_COUNT=${#NODES[@]}
     
     if [ $NODE_COUNT -gt 1 ]; then
+        echo -e "  ${CYAN}Node Selection:${NC}"
+        echo -e "  Choose where to deploy each component (0 = auto-assign)"
+        echo ""
+        
+        # Display node list
         for i in "${!NODES[@]}"; do
             NODE_STATUS=$(kubectl get node ${NODES[$i]} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
             STATUS_ICON="🟢"
@@ -224,20 +243,23 @@ configure_options() {
         done
         echo -e "    ${CYAN}0)${NC} Auto (let Kubernetes decide)"
         echo ""
-        read -p "  Choose node [0-${NODE_COUNT}] (default: 0): " POSTGRES_NODE_CHOICE
         
-        if [ -n "$POSTGRES_NODE_CHOICE" ] && [ "$POSTGRES_NODE_CHOICE" != "0" ] && [ "$POSTGRES_NODE_CHOICE" -le "$NODE_COUNT" ] 2>/dev/null; then
-            POSTGRES_NODE="${NODES[$((POSTGRES_NODE_CHOICE-1))]}"
-            echo -e "${GREEN}  ✓ PostgreSQL will deploy to: ${POSTGRES_NODE}${NC}"
-        else
-            POSTGRES_NODE=""
-            echo -e "${GREEN}  ✓ PostgreSQL: auto-assigned${NC}"
-        fi
+        # Select nodes for each component
+        select_node "PostgreSQL" "Database (needs stable storage)" "POSTGRES_NODE"
+        select_node "API Server" "Backend service" "API_NODE"
+        select_node "Dashboard" "Web UI" "DASHBOARD_NODE"
+        select_node "Camera Streams" "Default node for camera pods" "CAMERA_NODE"
+        select_node "Recordings" "Default node for recorder pods" "RECORDER_NODE"
+        
     else
         POSTGRES_NODE=""
-        echo -e "  Single node cluster - using: ${NODES[0]}"
+        API_NODE=""
+        DASHBOARD_NODE=""
+        CAMERA_NODE=""
+        RECORDER_NODE=""
+        echo -e "  Single node cluster - all components will deploy to: ${NODES[0]}"
+        echo ""
     fi
-    echo ""
     
     # Anthropic API key
     echo -e "  ${CYAN}AI Chatbot Configuration:${NC}"
@@ -364,6 +386,8 @@ data:
   DEFAULT_RESOLUTION: "640x480"
   DEFAULT_FRAMERATE: "15"
   ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+  DEFAULT_CAMERA_NODE: "${CAMERA_NODE:-}"
+  DEFAULT_RECORDER_NODE: "${RECORDER_NODE:-}"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -384,6 +408,8 @@ spec:
         falcon-eye/updated: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     spec:
       serviceAccountName: falcon-eye-sa
+$([ -n "$API_NODE" ] && echo "      nodeSelector:
+        kubernetes.io/hostname: ${API_NODE}")
       containers:
       - name: api
         image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
@@ -492,6 +518,8 @@ spec:
       annotations:
         falcon-eye/updated: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     spec:
+$([ -n "$DASHBOARD_NODE" ] && echo "      nodeSelector:
+        kubernetes.io/hostname: ${DASHBOARD_NODE}")
       containers:
       - name: dashboard
         image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-dashboard:latest

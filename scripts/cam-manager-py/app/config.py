@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     # Camera defaults
     default_resolution: str = "640x480"
     default_framerate: int = 15
+    default_camera_node: str = ""  # Default node for camera pods (empty = auto)
+    default_recorder_node: str = ""  # Default node for recorder pods (empty = auto)
     default_stream_quality: int = 70
     
     # Jetson nodes (require tolerations)
