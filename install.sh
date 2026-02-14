@@ -298,6 +298,10 @@ metadata:
 data:
   DATABASE_URL: "postgresql://falcon:falcon-eye-2026@postgres:5432/falconeye"
   NODE_ENV: "production"
+  CLEANUP_INTERVAL: "*/2 * * * *"
+  CREATING_TIMEOUT_MINUTES: "3"
+  DEFAULT_RESOLUTION: "640x480"
+  DEFAULT_FRAMERATE: "15"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -323,7 +327,7 @@ spec:
         image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
         imagePullPolicy: Always
         ports:
-        - containerPort: 3000
+        - containerPort: 8000
         envFrom:
         - configMapRef:
             name: falcon-eye-config
@@ -352,8 +356,8 @@ spec:
   selector:
     app: falcon-eye-api
   ports:
-  - port: 3000
-    targetPort: 3000
+  - port: 8000
+    targetPort: 8000
     nodePort: 30901
 ---
 apiVersion: v1
@@ -434,7 +438,7 @@ spec:
         - containerPort: 80
         env:
         - name: API_URL
-          value: "http://falcon-eye-api:3000"
+          value: "http://falcon-eye-api:8000"
 ---
 apiVersion: v1
 kind: Service
@@ -464,7 +468,8 @@ deploy_cleanup_cronjob() {
     echo -e "${YELLOW}[8/8] Deploying cleanup CronJob...${NC}"
     
     # Get cleanup interval from ConfigMap or use default (every 2 minutes)
-    CLEANUP_INTERVAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLEANUP_INTERVAL}' 2>/dev/null || echo "*/2 * * * *")
+    CLEANUP_INTERVAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLEANUP_INTERVAL}' 2>/dev/null)
+    CLEANUP_INTERVAL="${CLEANUP_INTERVAL:-*/2 * * * *}"
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
