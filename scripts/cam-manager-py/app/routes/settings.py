@@ -68,13 +68,21 @@ async def get_current_settings():
     except ApiException:
         pass  # ConfigMap doesn't exist, use defaults
     
+    # Build node_ips dict from individual settings
+    node_ips = {
+        "ace": settings.node_ip_ace,
+        "falcon": settings.node_ip_falcon,
+        "k3s-1": settings.node_ip_k3s1,
+        "k3s-2": settings.node_ip_k3s2,
+    }
+    
     return SettingsResponse(
         default_resolution=settings.default_resolution,
         default_framerate=settings.default_framerate,
         k8s_namespace=settings.k8s_namespace,
         cleanup_interval=cleanup_interval,
         creating_timeout_minutes=creating_timeout,
-        node_ips=settings.node_ips,
+        node_ips=node_ips,
     )
 
 
