@@ -7,8 +7,8 @@ from langchain_core.tools import tool
 import httpx
 
 
-# Base URL for internal API calls
-API_BASE = "http://localhost:3000"
+# Base URL for internal API calls (FastAPI runs on port 8000)
+API_BASE = "http://localhost:8000"
 DEFAULT_TIMEOUT = 30  # Increased timeout for reliability
 
 
