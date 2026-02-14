@@ -1,6 +1,7 @@
 """Falcon-Eye Camera Manager Configuration"""
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+import re
 
 
 class Settings(BaseSettings):
@@ -12,20 +13,43 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 3000
     
-    # Database
-    db_host: str = "postgres.ace-db.svc.cluster.local"
+    # Database - prefer DATABASE_URL env var if set
+    database_url_env: str | None = None  # Maps to DATABASE_URL
+    db_host: str = "postgres"
     db_port: int = 5432
-    db_user: str = "admin"
-    db_password: str = "amazingct"
-    db_name: str = "homedb"
+    db_user: str = "falcon"
+    db_password: str = "falcon-eye-2026"
+    db_name: str = "falconeye"
     
     @property
     def database_url(self) -> str:
+        """Get async database URL (asyncpg)"""
+        if self.database_url_env:
+            # Convert postgresql:// to postgresql+asyncpg://
+            url = self.database_url_env
+            if url.startswith("postgresql://"):
+                url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return url
         return f"postgresql+asyncpg://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
     
     @property
     def sync_database_url(self) -> str:
+        """Get sync database URL (psycopg2)"""
+        if self.database_url_env:
+            # Ensure it's plain postgresql:// for sync
+            url = self.database_url_env
+            if "+asyncpg" in url:
+                url = url.replace("+asyncpg", "")
+            return url
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+    
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        # Map DATABASE_URL env var to database_url_env field
+        fields = {
+            'database_url_env': {'env': 'DATABASE_URL'}
+        }
     
     # Kubernetes
     k8s_namespace: str = "falcon-eye"
