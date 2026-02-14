@@ -294,14 +294,16 @@ async def restart_all_deployments(background_tasks: BackgroundTasks):
     to_restart = []
     
     try:
-        # List all Falcon-Eye deployments
+        # List all deployments in namespace and filter by name prefix
         deployments = apps_api.list_namespaced_deployment(
-            namespace=settings.k8s_namespace,
-            label_selector="app=falcon-eye"
+            namespace=settings.k8s_namespace
         )
         
         for dep in deployments.items:
-            to_restart.append(dep.metadata.name)
+            name = dep.metadata.name
+            # Include falcon-eye-* deployments and camera deployments
+            if name.startswith("falcon-eye") or name.startswith("cam-"):
+                to_restart.append(name)
         
         # Also update CronJob if schedule changed
         cronjob_updated = False
