@@ -258,12 +258,14 @@ async def update_settings(update: SettingsUpdate):
         config_data["CHATBOT_TOOLS"] = ",".join(update.chatbot_tools)
     
     # Handle API key separately (store in Secret for security)
+    api_key_updated = False
     if update.anthropic_api_key:
         # Validate API key before saving
         is_valid = await validate_anthropic_api_key(update.anthropic_api_key)
         if not is_valid:
             raise HTTPException(status_code=400, detail="Invalid Anthropic API key")
         await _update_api_key_secret(core_api, update.anthropic_api_key)
+        api_key_updated = True
     
     # Create or update ConfigMap
     configmap = client.V1ConfigMap(
@@ -290,6 +292,32 @@ async def update_settings(update: SettingsUpdate):
             raise HTTPException(status_code=500, detail=f"K8s error: {e.reason}")
     
     logger.info(f"Settings updated: {config_data}")
+    
+    # Auto-restart API pod if API key was updated (to pick up new secret)
+    if api_key_updated:
+        try:
+            import time as time_module
+            apps_api = get_apps_api()
+            patch = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "kubectl.kubernetes.io/restartedAt": time_module.strftime("%Y-%m-%dT%H:%M:%SZ")
+                            }
+                        }
+                    }
+                }
+            }
+            apps_api.patch_namespaced_deployment(
+                name="falcon-eye-api",
+                namespace=settings.k8s_namespace,
+                body=patch,
+            )
+            logger.info("Restarted falcon-eye-api to pick up new API key")
+        except Exception as e:
+            logger.error(f"Failed to restart API pod: {e}")
+            # Don't fail the request - settings were saved successfully
     
     return await get_current_settings()
 
