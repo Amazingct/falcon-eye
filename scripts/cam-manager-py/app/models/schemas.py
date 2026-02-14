@@ -52,6 +52,7 @@ class CameraUpdate(BaseModel):
     """Schema for updating a camera"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     location: Optional[str] = Field(None, max_length=255)
+    source_url: Optional[str] = Field(None, description="Stream URL for network cameras")
     resolution: Optional[str] = None
     framerate: Optional[int] = Field(None, ge=1, le=60)
     metadata: Optional[dict[str, Any]] = None

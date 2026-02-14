@@ -197,19 +197,46 @@ async def create_camera(
 async def update_camera(
     camera_id: UUID,
     camera_data: CameraUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Update camera metadata"""
+    """Update camera metadata. Redeploys if source_url changes."""
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     camera = result.scalar_one_or_none()
     
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
     
-    # Update fields
+    # Check if source_url is changing (requires redeploy)
     update_data = camera_data.model_dump(exclude_unset=True)
+    needs_redeploy = 'source_url' in update_data and update_data['source_url'] != camera.source_url
+    
+    # Update fields
     for field, value in update_data.items():
         setattr(camera, field, value)
+    
+    # If source_url changed, redeploy the camera
+    if needs_redeploy and camera.deployment_name:
+        camera.status = CameraStatus.CREATING.value
+        await db.commit()
+        
+        # Delete old deployment and create new one
+        try:
+            await k8s.delete_camera_deployment(
+                camera.deployment_name or "",
+                camera.service_name or "",
+            )
+            await asyncio.sleep(2)  # Brief wait for cleanup
+            
+            k8s_result = await k8s.create_camera_deployment(camera)
+            camera.deployment_name = k8s_result["deployment_name"]
+            camera.service_name = k8s_result["service_name"]
+            camera.stream_port = k8s_result["stream_port"]
+            camera.control_port = k8s_result["control_port"]
+            camera.status = CameraStatus.RUNNING.value
+        except Exception as e:
+            camera.status = CameraStatus.ERROR.value
+            camera.metadata = {**camera.metadata, "error": str(e)}
     
     await db.commit()
     await db.refresh(camera)

@@ -612,11 +612,13 @@ function CameraPreviewModal({ camera, onClose }) {
 
 // Edit Camera Modal
 function EditCameraModal({ camera, onClose, onSave }) {
+  const isNetworkCamera = camera.protocol !== 'usb'
   const [form, setForm] = useState({
     name: camera.name,
     location: camera.location || '',
     resolution: camera.resolution || '640x480',
     framerate: camera.framerate || 15,
+    source_url: camera.source_url || '',
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -627,10 +629,16 @@ function EditCameraModal({ camera, onClose, onSave }) {
     setError(null)
 
     try {
+      const payload = { ...form }
+      // Only include source_url for network cameras
+      if (!isNetworkCamera) {
+        delete payload.source_url
+      }
+      
       const res = await fetch(`${API_URL}/cameras/${camera.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
         const data = await res.json()
@@ -669,6 +677,20 @@ function EditCameraModal({ camera, onClose, onSave }) {
               required
             />
           </div>
+
+          {isNetworkCamera && (
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Stream URL</label>
+              <input
+                type="text"
+                value={form.source_url}
+                onChange={e => setForm({ ...form, source_url: e.target.value })}
+                placeholder="rtsp://user:pass@192.168.1.1:554/stream"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono text-sm"
+              />
+              <p className="text-xs text-gray-500 mt-1">Include credentials: rtsp://user:pass@ip:port/path</p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">Location</label>
@@ -709,10 +731,10 @@ function EditCameraModal({ camera, onClose, onSave }) {
             </div>
           </div>
 
-          <div className="text-sm text-gray-400">
+          <div className="text-sm text-gray-400 bg-gray-700/30 rounded p-2">
             <p><strong>Type:</strong> {camera.protocol.toUpperCase()}</p>
-            <p><strong>Node:</strong> {camera.node_name}</p>
-            <p><strong>Device:</strong> {camera.device_path || camera.source_url}</p>
+            <p><strong>Node:</strong> {camera.node_name || 'LAN'}</p>
+            {!isNetworkCamera && <p><strong>Device:</strong> {camera.device_path}</p>}
           </div>
 
           <div className="flex items-center justify-end space-x-3 pt-4">
