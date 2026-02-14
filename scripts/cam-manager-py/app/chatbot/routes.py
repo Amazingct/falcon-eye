@@ -286,7 +286,7 @@ async def chat_in_session(
     
     if request.stream:
         return EventSourceResponse(
-            stream_session_response(session_id, messages, db),
+            stream_session_response(session_id, messages),
             media_type="text/event-stream"
         )
     else:
@@ -314,8 +314,10 @@ async def chat_in_session(
         return {"role": "assistant", "content": full_response}
 
 
-async def stream_session_response(session_id: UUID, messages: list[dict], db: AsyncSession):
-    """Stream response and save to DB"""
+async def stream_session_response(session_id: UUID, messages: list[dict]):
+    """Stream response and save to DB (creates own db session)"""
+    from app.database import AsyncSessionLocal
+    
     full_response = ""
     
     try:
@@ -332,31 +334,32 @@ async def stream_session_response(session_id: UUID, messages: list[dict], db: As
                     "data": json.dumps({"status": "using_tools"})
                 }
         
-        # Save assistant response to DB
-        assistant_msg = ChatMessage(
-            session_id=session_id,
-            role="assistant",
-            content=full_response,
-        )
-        db.add(assistant_msg)
-        
-        # Auto-name session if needed
-        result = await db.execute(
-            select(ChatSession).where(ChatSession.id == session_id)
-        )
-        session = result.scalar_one_or_none()
-        
-        if session and not session.name:
-            msgs_result = await db.execute(
-                select(ChatMessage)
-                .where(ChatMessage.session_id == session_id)
-                .order_by(ChatMessage.created_at)
+        # Save assistant response to DB with fresh session
+        async with AsyncSessionLocal() as db:
+            assistant_msg = ChatMessage(
+                session_id=session_id,
+                role="assistant",
+                content=full_response,
             )
-            all_messages = msgs_result.scalars().all()
-            if len(all_messages) >= 2:
-                session.name = generate_session_name(list(all_messages))
-        
-        await db.commit()
+            db.add(assistant_msg)
+            
+            # Auto-name session if needed
+            result = await db.execute(
+                select(ChatSession).where(ChatSession.id == session_id)
+            )
+            session = result.scalar_one_or_none()
+            
+            if session and not session.name:
+                msgs_result = await db.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.session_id == session_id)
+                    .order_by(ChatMessage.created_at)
+                )
+                all_messages = msgs_result.scalars().all()
+                if len(all_messages) >= 2:
+                    session.name = generate_session_name(list(all_messages))
+            
+            await db.commit()
         
         yield {
             "event": "done",
