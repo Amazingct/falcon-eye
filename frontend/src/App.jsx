@@ -73,6 +73,16 @@ function App() {
     }
   }
 
+  // Restart camera
+  const restartCamera = async (camera) => {
+    try {
+      await fetch(`${API_URL}/cameras/${camera.id}/restart`, { method: 'POST' })
+      fetchCameras()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       {/* Header */}
@@ -189,6 +199,7 @@ function App() {
             onToggle={toggleCamera}
             onSelect={setSelectedCamera}
             onEdit={setShowEditModal}
+            onRestart={restartCamera}
           />
         ) : (
           <CameraList
@@ -196,6 +207,7 @@ function App() {
             onDelete={deleteCamera}
             onToggle={toggleCamera}
             onEdit={setShowEditModal}
+            onRestart={restartCamera}
           />
         )}
       </main>
@@ -248,7 +260,7 @@ function App() {
 }
 
 // Camera Grid Component
-function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
+function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }) {
   const isDeleting = (camera) => camera.status === 'deleting'
   const isCreating = (camera) => camera.status === 'creating' || camera.status === 'pending'
   const isBusy = (camera) => isDeleting(camera) || isCreating(camera)
@@ -328,13 +340,23 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
                       ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
                       : 'bg-green-500/20 hover:bg-green-500/30 text-green-400'
                   }`}
+                  title={camera.status === 'running' ? 'Stop' : 'Start'}
                 >
                   {camera.status === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                </button>
+                <button
+                  onClick={() => onRestart(camera)}
+                  disabled={isBusy(camera)}
+                  className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-orange-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Restart"
+                >
+                  <RefreshCw className="h-4 w-4" />
                 </button>
                 <button
                   onClick={() => onEdit(camera)}
                   disabled={isBusy(camera)}
                   className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-blue-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Edit"
                 >
                   <Edit className="h-4 w-4" />
                 </button>
@@ -343,6 +365,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
                 onClick={() => onDelete(camera.id)}
                 disabled={isBusy(camera)}
                 className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-red-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                title="Delete"
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -355,7 +378,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
 }
 
 // Camera List Component
-function CameraList({ cameras, onDelete, onToggle, onEdit }) {
+function CameraList({ cameras, onDelete, onToggle, onEdit, onRestart }) {
   const isDeleting = (camera) => camera.status === 'deleting'
   const isCreating = (camera) => camera.status === 'creating' || camera.status === 'pending'
   const isBusy = (camera) => isDeleting(camera) || isCreating(camera)
@@ -398,13 +421,23 @@ function CameraList({ cameras, onDelete, onToggle, onEdit }) {
                     onClick={() => onToggle(camera)}
                     disabled={isBusy(camera)}
                     className={`p-1.5 rounded hover:bg-gray-600 transition ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    title={camera.status === 'running' ? 'Stop' : 'Start'}
                   >
                     {camera.status === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                  </button>
+                  <button
+                    onClick={() => onRestart(camera)}
+                    disabled={isBusy(camera)}
+                    className={`p-1.5 rounded hover:bg-gray-600 transition text-orange-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    title="Restart"
+                  >
+                    <RefreshCw className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => onEdit(camera)}
                     disabled={isBusy(camera)}
                     className={`p-1.5 rounded hover:bg-gray-600 transition text-blue-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    title="Edit"
                   >
                     <Edit className="h-4 w-4" />
                   </button>
@@ -412,6 +445,7 @@ function CameraList({ cameras, onDelete, onToggle, onEdit }) {
                     onClick={() => onDelete(camera.id)}
                     disabled={isBusy(camera)}
                     className={`p-1.5 rounded hover:bg-gray-600 transition text-red-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    title="Delete"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
