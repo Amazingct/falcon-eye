@@ -102,9 +102,83 @@ def delete_orphan_deployment(camera_id: str):
             logger.error(f"Error deleting service: {e}")
 
 
+def get_running_recorder_camera_ids() -> set[str]:
+    """Get camera IDs that have running recorder pods"""
+    load_k8s_config()
+    core_api = client.CoreV1Api()
+    
+    try:
+        pods = core_api.list_namespaced_pod(
+            namespace=K8S_NAMESPACE,
+            label_selector="component=recorder"
+        )
+        running_ids = set()
+        for pod in pods.items:
+            if pod.status.phase == "Running":
+                # Recorder uses "recorder-for" label
+                camera_id = pod.metadata.labels.get("recorder-for")
+                if camera_id:
+                    running_ids.add(camera_id)
+        return running_ids
+    except ApiException as e:
+        logger.error(f"Error listing recorder pods: {e}")
+        return set()
+
+
+async def fix_orphaned_recordings():
+    """Fix recordings stuck in 'recording' status when recorder pod is gone"""
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy import text
+    from datetime import datetime
+    
+    logger.info("Checking for orphaned recordings...")
+    
+    # Get camera IDs with running recorders
+    running_recorders = get_running_recorder_camera_ids()
+    logger.info(f"Found {len(running_recorders)} running recorder pods")
+    
+    engine = create_async_engine(DATABASE_URL)
+    async with AsyncSession(engine) as session:
+        # Find recordings marked as 'recording' 
+        result = await session.execute(
+            text("SELECT id, camera_id::text FROM recordings WHERE status = 'recording'")
+        )
+        active_recordings = result.fetchall()
+        
+        fixed_count = 0
+        for rec_id, camera_id in active_recordings:
+            if camera_id not in running_recorders:
+                # Recorder pod is gone, mark recording as stopped
+                await session.execute(
+                    text("""
+                        UPDATE recordings 
+                        SET status = 'stopped', 
+                            end_time = :end_time,
+                            error_message = 'Recording stopped: Recorder pod terminated'
+                        WHERE id = :id
+                    """),
+                    {"id": rec_id, "end_time": datetime.utcnow()}
+                )
+                fixed_count += 1
+                logger.info(f"Fixed orphaned recording {rec_id} for camera {camera_id}")
+        
+        if fixed_count > 0:
+            await session.commit()
+            logger.info(f"Fixed {fixed_count} orphaned recording(s)")
+        else:
+            logger.info("No orphaned recordings found")
+    
+    await engine.dispose()
+
+
 async def cleanup_orphans():
     """Main cleanup function"""
-    logger.info("Starting orphan pod cleanup...")
+    logger.info("Starting cleanup task...")
+    
+    # Fix orphaned recordings first
+    await fix_orphaned_recordings()
+    
+    logger.info("Checking for orphan pods...")
     
     # Get camera IDs from database
     db_camera_ids = await get_db_camera_ids()
@@ -122,6 +196,7 @@ async def cleanup_orphans():
     
     if not orphan_camera_ids:
         logger.info("No orphan pods found")
+        logger.info("Cleanup complete")
         return
     
     logger.info(f"Found {len(orphan_camera_ids)} orphan camera(s)")

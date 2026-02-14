@@ -653,7 +653,10 @@ async def get_recording_status(
     camera_id: UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get recording status for a camera"""
+    """Get recording status for a camera. Auto-fixes orphaned recordings if pod is gone."""
+    from app.models.recording import Recording, RecordingStatus
+    from datetime import datetime
+    
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     camera = result.scalar_one_or_none()
     
@@ -661,7 +664,27 @@ async def get_recording_status(
         raise HTTPException(status_code=404, detail="Camera not found")
     
     recorder_url, is_ready = await _get_recorder_url(str(camera_id))
+    
+    # Helper to fix orphaned recordings when recorder is not available
+    async def fix_orphaned_recordings(reason: str):
+        """Mark any active recordings as stopped if recorder pod is gone"""
+        active_recordings = await db.execute(
+            select(Recording).where(
+                Recording.camera_id == camera_id,
+                Recording.status == RecordingStatus.RECORDING,
+            )
+        )
+        orphaned = active_recordings.scalars().all()
+        for rec in orphaned:
+            rec.status = RecordingStatus.STOPPED
+            rec.end_time = datetime.utcnow()
+            rec.error_message = f"Recording stopped: {reason}"
+        if orphaned:
+            await db.commit()
+            print(f"Fixed {len(orphaned)} orphaned recordings for camera {camera_id}: {reason}")
+    
     if not recorder_url:
+        await fix_orphaned_recordings("Recorder pod not deployed")
         return {"recording": False, "status": "no_recorder", "message": "Recorder not deployed"}
     if not is_ready:
         return {"recording": False, "status": "deploying", "message": "Recorder service still deploying"}
@@ -670,9 +693,15 @@ async def get_recording_status(
         async with httpx.AsyncClient(timeout=5) as client:
             res = await client.get(f"{recorder_url}/status")
             if res.status_code == 200:
-                return res.json()
+                data = res.json()
+                # If recorder says idle but DB says recording, fix the DB
+                if data.get("status") == "idle":
+                    await fix_orphaned_recordings("Recorder reports idle state")
+                return data
+            await fix_orphaned_recordings(f"Recorder returned status {res.status_code}")
             return {"recording": False, "status": "error", "message": f"Recorder returned {res.status_code}"}
     except Exception as e:
+        await fix_orphaned_recordings(f"Cannot reach recorder: {e}")
         return {"recording": False, "status": "error", "message": str(e)}
 
 
