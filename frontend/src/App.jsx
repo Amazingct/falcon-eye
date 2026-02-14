@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square } from 'lucide-react'
+import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight } from 'lucide-react'
 
 const API_URL = window.API_URL || '/api'
 
@@ -9,6 +9,7 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [viewMode, setViewMode] = useState('grid') // grid or list
+  const [currentPage, setCurrentPage] = useState('cameras') // cameras or recordings
   const [showAddModal, setShowAddModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(null) // camera to edit
   const [showScanModal, setShowScanModal] = useState(false)
@@ -95,7 +96,23 @@ function App() {
             <div className="flex items-center space-x-3">
               <Camera className="h-8 w-8 text-blue-500" />
               <h1 className="text-2xl font-bold">Falcon-Eye</h1>
-              <span className="text-sm text-gray-400">Camera Dashboard</span>
+              {/* Page Toggle */}
+              <div className="flex bg-gray-700 rounded-lg p-1 ml-4">
+                <button
+                  onClick={() => setCurrentPage('cameras')}
+                  className={`px-3 py-1 rounded flex items-center space-x-1 text-sm ${currentPage === 'cameras' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                >
+                  <Camera className="h-4 w-4" />
+                  <span>Cameras</span>
+                </button>
+                <button
+                  onClick={() => setCurrentPage('recordings')}
+                  className={`px-3 py-1 rounded flex items-center space-x-1 text-sm ${currentPage === 'recordings' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                >
+                  <Film className="h-4 w-4" />
+                  <span>Recordings</span>
+                </button>
+              </div>
             </div>
             <div className="flex items-center space-x-4">
               <button
@@ -186,39 +203,45 @@ function App() {
           </div>
         )}
 
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
-          </div>
-        ) : cameras.length === 0 ? (
-          <div className="text-center py-16">
-            <Camera className="h-16 w-16 mx-auto text-gray-600 mb-4" />
-            <h2 className="text-xl font-semibold text-gray-400 mb-2">No cameras yet</h2>
-            <p className="text-gray-500 mb-4">Add your first camera to get started</p>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition"
-            >
-              Add Camera
-            </button>
-          </div>
-        ) : viewMode === 'grid' ? (
-          <CameraGrid
-            cameras={cameras}
-            onDelete={deleteCamera}
-            onToggle={toggleCamera}
-            onSelect={setSelectedCamera}
-            onEdit={setShowEditModal}
-            onRestart={restartCamera}
-          />
+        {currentPage === 'cameras' ? (
+          // Cameras View
+          loading ? (
+            <div className="flex items-center justify-center h-64">
+              <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
+            </div>
+          ) : cameras.length === 0 ? (
+            <div className="text-center py-16">
+              <Camera className="h-16 w-16 mx-auto text-gray-600 mb-4" />
+              <h2 className="text-xl font-semibold text-gray-400 mb-2">No cameras yet</h2>
+              <p className="text-gray-500 mb-4">Add your first camera to get started</p>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition"
+              >
+                Add Camera
+              </button>
+            </div>
+          ) : viewMode === 'grid' ? (
+            <CameraGrid
+              cameras={cameras}
+              onDelete={deleteCamera}
+              onToggle={toggleCamera}
+              onSelect={setSelectedCamera}
+              onEdit={setShowEditModal}
+              onRestart={restartCamera}
+            />
+          ) : (
+            <CameraList
+              cameras={cameras}
+              onDelete={deleteCamera}
+              onToggle={toggleCamera}
+              onEdit={setShowEditModal}
+              onRestart={restartCamera}
+            />
+          )
         ) : (
-          <CameraList
-            cameras={cameras}
-            onDelete={deleteCamera}
-            onToggle={toggleCamera}
-            onEdit={setShowEditModal}
-            onRestart={restartCamera}
-          />
+          // Recordings View
+          <RecordingsPage cameras={cameras} />
         )}
       </main>
 
@@ -1698,6 +1721,271 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
           </p>
         )}
       </div>
+    </div>
+  )
+}
+
+// Recordings Page Component
+function RecordingsPage({ cameras }) {
+  const [recordings, setRecordings] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selectedRecording, setSelectedRecording] = useState(null)
+  const [expandedCameras, setExpandedCameras] = useState({})
+  const [filter, setFilter] = useState('all') // all, recording, completed
+
+  // Fetch all recordings
+  useEffect(() => {
+    const fetchRecordings = async () => {
+      setLoading(true)
+      try {
+        const res = await fetch(`${API_URL}/recordings/`)
+        if (res.ok) {
+          const data = await res.json()
+          setRecordings(data.recordings || [])
+        }
+      } catch (err) {
+        console.error('Failed to fetch recordings:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchRecordings()
+    const interval = setInterval(fetchRecordings, 10000) // Refresh every 10s
+    return () => clearInterval(interval)
+  }, [])
+
+  // Group recordings by camera
+  const groupedRecordings = recordings.reduce((acc, rec) => {
+    const camId = rec.camera_id
+    if (!acc[camId]) {
+      acc[camId] = []
+    }
+    acc[camId].push(rec)
+    return acc
+  }, {})
+
+  // Get camera name by ID
+  const getCameraName = (camId) => {
+    const cam = cameras.find(c => c.id === camId)
+    return cam?.name || `Camera ${camId.slice(0, 8)}`
+  }
+
+  // Toggle camera expansion
+  const toggleCamera = (camId) => {
+    setExpandedCameras(prev => ({ ...prev, [camId]: !prev[camId] }))
+  }
+
+  // Delete recording
+  const deleteRecording = async (recordingId) => {
+    if (!confirm('Delete this recording?')) return
+    try {
+      await fetch(`${API_URL}/recordings/${recordingId}`, { method: 'DELETE' })
+      setRecordings(prev => prev.filter(r => r.id !== recordingId))
+    } catch (err) {
+      console.error('Failed to delete recording:', err)
+    }
+  }
+
+  // Format duration
+  const formatDuration = (seconds) => {
+    if (!seconds) return '--:--'
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  // Format file size
+  const formatSize = (bytes) => {
+    if (!bytes) return '--'
+    const mb = bytes / (1024 * 1024)
+    return mb >= 1000 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`
+  }
+
+  // Format date
+  const formatDate = (isoString) => {
+    if (!isoString) return '--'
+    const date = new Date(isoString)
+    return date.toLocaleString()
+  }
+
+  // Filter recordings
+  const filteredRecordings = filter === 'all' 
+    ? recordings 
+    : recordings.filter(r => r.status === filter)
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">Recordings</h2>
+          <p className="text-sm text-gray-400">
+            {recordings.length} recording{recordings.length !== 1 ? 's' : ''} • 
+            {recordings.filter(r => r.status === 'recording').length} active
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="all">All</option>
+            <option value="recording">Recording</option>
+            <option value="completed">Completed</option>
+            <option value="stopped">Stopped</option>
+          </select>
+        </div>
+      </div>
+
+      {recordings.length === 0 ? (
+        <div className="text-center py-16">
+          <Film className="h-16 w-16 mx-auto text-gray-600 mb-4" />
+          <h2 className="text-xl font-semibold text-gray-400 mb-2">No recordings yet</h2>
+          <p className="text-gray-500">Start recording from a camera to see recordings here</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {Object.entries(groupedRecordings).map(([camId, recs]) => (
+            <div key={camId} className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+              {/* Camera Header */}
+              <button
+                onClick={() => toggleCamera(camId)}
+                className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-700/50 transition"
+              >
+                <div className="flex items-center space-x-3">
+                  {expandedCameras[camId] ? 
+                    <ChevronDown className="h-5 w-5 text-gray-400" /> : 
+                    <ChevronRight className="h-5 w-5 text-gray-400" />
+                  }
+                  <Camera className="h-5 w-5 text-blue-500" />
+                  <span className="font-medium">{getCameraName(camId)}</span>
+                  <span className="text-sm text-gray-400">({recs.length} recordings)</span>
+                </div>
+                {recs.some(r => r.status === 'recording') && (
+                  <span className="flex items-center space-x-1 text-red-500 text-sm">
+                    <Circle className="h-3 w-3 fill-current animate-pulse" />
+                    <span>Recording</span>
+                  </span>
+                )}
+              </button>
+
+              {/* Recordings List */}
+              {expandedCameras[camId] && (
+                <div className="border-t border-gray-700">
+                  {recs
+                    .filter(r => filter === 'all' || r.status === filter)
+                    .sort((a, b) => new Date(b.start_time) - new Date(a.start_time))
+                    .map((rec) => (
+                    <div
+                      key={rec.id}
+                      className="px-4 py-3 flex items-center justify-between hover:bg-gray-700/30 border-b border-gray-700/50 last:border-0"
+                    >
+                      <div className="flex items-center space-x-4">
+                        <div className={`p-2 rounded-lg ${
+                          rec.status === 'recording' ? 'bg-red-500/20' :
+                          rec.status === 'completed' ? 'bg-green-500/20' : 'bg-gray-500/20'
+                        }`}>
+                          {rec.status === 'recording' ? (
+                            <Circle className="h-4 w-4 text-red-500 fill-current animate-pulse" />
+                          ) : (
+                            <Film className="h-4 w-4 text-gray-400" />
+                          )}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium">{rec.file_name || 'Recording'}</p>
+                          <div className="flex items-center space-x-3 text-xs text-gray-400">
+                            <span className="flex items-center space-x-1">
+                              <Clock className="h-3 w-3" />
+                              <span>{formatDate(rec.start_time)}</span>
+                            </span>
+                            {rec.duration_seconds && (
+                              <span>{formatDuration(rec.duration_seconds)}</span>
+                            )}
+                            {rec.file_size_bytes && (
+                              <span>{formatSize(rec.file_size_bytes)}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className={`px-2 py-1 text-xs rounded ${
+                          rec.status === 'recording' ? 'bg-red-500/20 text-red-400' :
+                          rec.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                          'bg-gray-500/20 text-gray-400'
+                        }`}>
+                          {rec.status}
+                        </span>
+                        {rec.status !== 'recording' && (
+                          <>
+                            <button
+                              onClick={() => setSelectedRecording(rec)}
+                              className="p-2 hover:bg-gray-600 rounded-lg transition text-blue-400"
+                              title="Play"
+                            >
+                              <Play className="h-4 w-4" />
+                            </button>
+                            <a
+                              href={`${API_URL}/recordings/${rec.id}/download`}
+                              className="p-2 hover:bg-gray-600 rounded-lg transition text-green-400"
+                              title="Download"
+                            >
+                              <Download className="h-4 w-4" />
+                            </a>
+                            <button
+                              onClick={() => deleteRecording(rec.id)}
+                              className="p-2 hover:bg-gray-600 rounded-lg transition text-red-400"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Video Player Modal */}
+      {selectedRecording && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg max-w-4xl w-full mx-4 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+              <div>
+                <h3 className="font-medium">{selectedRecording.file_name}</h3>
+                <p className="text-sm text-gray-400">{formatDate(selectedRecording.start_time)}</p>
+              </div>
+              <button
+                onClick={() => setSelectedRecording(null)}
+                className="p-2 hover:bg-gray-700 rounded-lg transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="aspect-video bg-black">
+              <video
+                src={`${API_URL}/recordings/${selectedRecording.id}/download`}
+                controls
+                autoPlay
+                className="w-full h-full"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
