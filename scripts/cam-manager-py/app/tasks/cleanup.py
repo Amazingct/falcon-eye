@@ -234,9 +234,9 @@ async def fix_orphaned_recordings():
     
     engine = create_async_engine(DATABASE_URL)
     async with AsyncSession(engine) as session:
-        # Find recordings marked as 'recording' 
+        # Find recordings marked as 'RECORDING' (enum is uppercase)
         result = await session.execute(
-            text("SELECT id, camera_id::text FROM recordings WHERE status = 'recording'")
+            text("SELECT id, camera_id::text FROM recordings WHERE status = 'RECORDING'")
         )
         active_recordings = result.fetchall()
         
@@ -247,7 +247,7 @@ async def fix_orphaned_recordings():
                 await session.execute(
                     text("""
                         UPDATE recordings 
-                        SET status = 'stopped', 
+                        SET status = 'STOPPED', 
                             end_time = :end_time,
                             error_message = 'Recording stopped: Recorder pod terminated'
                         WHERE id = :id
