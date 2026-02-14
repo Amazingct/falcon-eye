@@ -228,7 +228,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect }) {
           >
             {camera.status === 'running' ? (
               <img
-                src={camera.streamUrl}
+                src={camera.stream_url}
                 alt={camera.name}
                 className="w-full h-full object-cover"
                 onError={(e) => {
@@ -255,11 +255,11 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect }) {
           <div className="p-3">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold truncate">{camera.name}</h3>
-              <span className="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded">
-                {camera.type}
+              <span className="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded uppercase">
+                {camera.protocol}
               </span>
             </div>
-            <p className="text-sm text-gray-400 truncate mb-3">{camera.node}</p>
+            <p className="text-sm text-gray-400 truncate mb-3">{camera.node_name}</p>
             
             {/* Actions */}
             <div className="flex items-center justify-between">
@@ -306,9 +306,9 @@ function CameraList({ cameras, onDelete, onToggle }) {
             <tr key={camera.id} className="hover:bg-gray-700/30">
               <td className="px-4 py-3 font-medium">{camera.name}</td>
               <td className="px-4 py-3">
-                <span className="bg-gray-700 px-2 py-1 rounded text-sm">{camera.type}</span>
+                <span className="bg-gray-700 px-2 py-1 rounded text-sm uppercase">{camera.protocol}</span>
               </td>
-              <td className="px-4 py-3 text-gray-400">{camera.node}</td>
+              <td className="px-4 py-3 text-gray-400">{camera.node_name}</td>
               <td className="px-4 py-3">
                 <span className={`inline-flex items-center space-x-1 ${
                   camera.status === 'running' ? 'text-green-400' : 'text-red-400'
@@ -365,14 +365,30 @@ function AddCameraModal({ nodes, onClose, onAdd }) {
     setError(null)
 
     try {
-      const res = await fetch(`${API_URL}/cameras`, {
+      // Transform form data to API format
+      const payload = {
+        name: form.name,
+        protocol: form.type,
+      }
+
+      // USB cameras require node_name and device_path
+      if (form.type === 'usb') {
+        payload.node_name = form.node
+        payload.device_path = form.source || '/dev/video0'
+      } else {
+        // Network cameras: node is optional, source goes to source_url
+        if (form.node) payload.node_name = form.node
+        payload.source_url = form.source
+      }
+
+      const res = await fetch(`${API_URL}/cameras/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
         const data = await res.json()
-        throw new Error(data.error || 'Failed to add camera')
+        throw new Error(data.detail || data.error || 'Failed to add camera')
       }
       onAdd()
     } catch (err) {
@@ -491,7 +507,7 @@ function CameraPreviewModal({ camera, onClose }) {
           <div className="aspect-video bg-black">
             {camera.status === 'running' ? (
               <img
-                src={camera.streamUrl}
+                src={camera.stream_url}
                 alt={camera.name}
                 className="w-full h-full object-contain"
               />
