@@ -18,7 +18,7 @@ function App() {
       const res = await fetch(`${API_URL}/cameras/`)
       if (!res.ok) throw new Error('Failed to fetch cameras')
       const data = await res.json()
-      setCameras(data)
+      setCameras(data.cameras || [])
     } catch (err) {
       setError(err.message)
     }
