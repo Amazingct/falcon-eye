@@ -6,8 +6,41 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 import logging
 import time
+import httpx
 
 from app.config import get_settings
+
+
+async def validate_anthropic_api_key(api_key: str) -> bool:
+    """Validate Anthropic API key by making a test request"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-3-haiku-20240307",
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "Hi"}]
+                },
+                timeout=10.0
+            )
+            # 200 = valid, 401 = invalid key, other errors might be rate limits etc
+            if response.status_code == 200:
+                return True
+            elif response.status_code == 401:
+                return False
+            else:
+                # Other errors (rate limit, etc) - key might still be valid
+                logger.warning(f"API key validation got status {response.status_code}")
+                return True  # Assume valid if not explicitly 401
+    except Exception as e:
+        logger.error(f"API key validation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to validate API key: {str(e)}")
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 logger = logging.getLogger(__name__)
@@ -226,6 +259,10 @@ async def update_settings(update: SettingsUpdate):
     
     # Handle API key separately (store in Secret for security)
     if update.anthropic_api_key:
+        # Validate API key before saving
+        is_valid = await validate_anthropic_api_key(update.anthropic_api_key)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail="Invalid Anthropic API key")
         await _update_api_key_secret(core_api, update.anthropic_api_key)
     
     # Create or update ConfigMap

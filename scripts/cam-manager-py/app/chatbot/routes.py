@@ -92,12 +92,21 @@ async def stream_response(messages: list[dict]):
         # API key not set
         yield {
             "event": "error",
-            "data": json.dumps({"error": str(e)})
+            "data": json.dumps({"error": "Chatbot not configured. Please add your Anthropic API key in Settings."})
         }
     except Exception as e:
+        error_str = str(e)
+        # Parse common error types for user-friendly messages
+        if "401" in error_str or "authentication_error" in error_str or "invalid x-api-key" in error_str.lower():
+            user_error = "Invalid Anthropic API key. Please check your API key in Settings."
+        elif "rate_limit" in error_str.lower() or "429" in error_str:
+            user_error = "Rate limit exceeded. Please wait a moment and try again."
+        else:
+            user_error = f"Chat error: {error_str}"
+        
         yield {
             "event": "error", 
-            "data": json.dumps({"error": f"Chat error: {str(e)}"})
+            "data": json.dumps({"error": user_error})
         }
 
 
@@ -395,7 +404,18 @@ async def stream_session_response(session_id: UUID, messages: list[dict]):
         }
         
     except Exception as e:
+        error_str = str(e)
+        # Parse common error types for user-friendly messages
+        if "401" in error_str or "authentication_error" in error_str or "invalid x-api-key" in error_str.lower():
+            user_error = "Invalid Anthropic API key. Please check your API key in Settings."
+        elif "rate_limit" in error_str.lower() or "429" in error_str:
+            user_error = "Rate limit exceeded. Please wait a moment and try again."
+        elif "ANTHROPIC_API_KEY" in error_str:
+            user_error = "Chatbot not configured. Please add your Anthropic API key in Settings."
+        else:
+            user_error = f"Chat error: {error_str}"
+        
         yield {
             "event": "error",
-            "data": json.dumps({"error": str(e)})
+            "data": json.dumps({"error": user_error})
         }
