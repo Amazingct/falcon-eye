@@ -195,6 +195,28 @@ detect_nodes() {
     echo ""
 }
 
+# Prompt for optional configuration
+configure_options() {
+    # Skip prompts if running non-interactively or upgrading
+    if [ ! -t 0 ] || [ "$IS_UPGRADE" = true ]; then
+        return
+    fi
+    
+    echo -e "${YELLOW}[3.5/8] Optional Configuration...${NC}"
+    echo ""
+    echo -e "  The AI chatbot requires an Anthropic API key."
+    echo -e "  Get one at: ${CYAN}https://console.anthropic.com/settings/keys${NC}"
+    echo ""
+    read -p "  Enter Anthropic API key (or press Enter to skip): " ANTHROPIC_API_KEY
+    
+    if [ -n "$ANTHROPIC_API_KEY" ]; then
+        echo -e "${GREEN}  ✓ API key configured - chatbot enabled${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Skipped - chatbot will be disabled${NC}"
+    fi
+    echo ""
+}
+
 # Create namespace
 create_namespace() {
     echo -e "${YELLOW}[4/8] Setting up namespace '${NAMESPACE}'...${NC}"
@@ -302,6 +324,7 @@ data:
   CREATING_TIMEOUT_MINUTES: "3"
   DEFAULT_RESOLUTION: "640x480"
   DEFAULT_FRAMERATE: "15"
+  ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -675,6 +698,7 @@ main() {
     check_prerequisites
     check_existing
     detect_nodes
+    configure_options
     create_namespace
     deploy_database
     deploy_backend
