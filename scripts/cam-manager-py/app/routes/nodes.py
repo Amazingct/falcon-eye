@@ -2,7 +2,6 @@
 Node management routes
 """
 import asyncio
-import subprocess
 from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -48,31 +47,39 @@ async def get_node(name: str):
 
 
 async def _scan_node_cameras(node_name: str, node_ip: str) -> tuple[list[USBCamera], Optional[str]]:
-    """Scan a node for USB cameras via SSH"""
+    """Scan a node for USB cameras via SSH using paramiko"""
+    import paramiko
     cameras = []
     error = None
     
+    # Determine username based on node
+    username = "ace" if node_name in ["ace", "falcon"] else "root"
+    password = "amazingct"
+    
     try:
-        # SSH command to list video devices
-        cmd = [
-            "sshpass", "-p", "amazingct",
-            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5",
-            f"ace@{node_ip}" if node_name in ["ace", "falcon"] else f"root@{node_ip}",
-            "for d in /dev/video*; do [ -e \"$d\" ] && echo \"$d|$(cat /sys/class/video4linux/$(basename $d)/name 2>/dev/null || echo 'Unknown')\"; done"
-        ]
+        # Run SSH in thread pool to avoid blocking
+        def ssh_scan():
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(node_ip, username=username, password=password, timeout=5)
+            
+            cmd = 'for d in /dev/video*; do [ -e "$d" ] && echo "$d|$(cat /sys/class/video4linux/$(basename $d)/name 2>/dev/null || echo Unknown)"; done'
+            stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
+            output = stdout.read().decode().strip()
+            err = stderr.read().decode().strip()
+            client.close()
+            return output, err
         
-        result = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        loop = asyncio.get_event_loop()
+        output, err = await asyncio.wait_for(
+            loop.run_in_executor(None, ssh_scan),
+            timeout=15
         )
-        stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=10)
         
-        if result.returncode == 0 and stdout:
-            for line in stdout.decode().strip().split('\n'):
+        if output:
+            for line in output.split('\n'):
                 if '|' in line:
                     device_path, device_name = line.split('|', 1)
-                    # Skip metadata devices (usually odd-numbered for same camera)
                     if device_path and device_name:
                         cameras.append(USBCamera(
                             device_path=device_path.strip(),
@@ -80,13 +87,13 @@ async def _scan_node_cameras(node_name: str, node_ip: str) -> tuple[list[USBCame
                             node_name=node_name,
                             node_ip=node_ip,
                         ))
-        elif stderr:
-            error = stderr.decode().strip()[:100]
+        elif err and not output:
+            error = err[:100]
             
     except asyncio.TimeoutError:
         error = f"Timeout connecting to {node_name}"
     except Exception as e:
-        error = str(e)[:100]
+        error = f"{node_name}: {str(e)[:80]}"
     
     return cameras, error
 
