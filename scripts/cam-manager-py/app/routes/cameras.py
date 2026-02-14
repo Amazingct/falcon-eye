@@ -588,8 +588,10 @@ async def get_stream_info(
 import httpx
 
 
-async def _get_recorder_url(camera_id: str) -> str:
-    """Get the recorder service URL for a camera"""
+async def _get_recorder_url(camera_id: str) -> tuple[str, bool]:
+    """Get the recorder service URL for a camera.
+    Returns (url, is_ready) - url may exist but pod not ready yet.
+    """
     # Recorder service is internal ClusterIP
     # Service name pattern: svc-rec-{name_slug}
     # But we can use label selector to find it
@@ -600,10 +602,25 @@ async def _get_recorder_url(camera_id: str) -> str:
         )
         if services.items:
             svc = services.items[0]
-            return f"http://{svc.metadata.name}.{settings.k8s_namespace}.svc.cluster.local:8080"
+            url = f"http://{svc.metadata.name}.{settings.k8s_namespace}.svc.cluster.local:8080"
+            
+            # Check if recorder pod is ready
+            pods = k8s.core_api.list_namespaced_pod(
+                namespace=settings.k8s_namespace,
+                label_selector=f"component=recorder,recorder-for={camera_id}",
+            )
+            is_ready = False
+            if pods.items:
+                pod = pods.items[0]
+                if pod.status.phase == "Running":
+                    # Check container ready status
+                    if pod.status.container_statuses:
+                        is_ready = all(c.ready for c in pod.status.container_statuses)
+            
+            return url, is_ready
     except Exception as e:
         print(f"Failed to find recorder service: {e}")
-    return None
+    return None, False
 
 
 @router.get("/{camera_id}/recording/status")
@@ -618,9 +635,11 @@ async def get_recording_status(
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
     
-    recorder_url = await _get_recorder_url(str(camera_id))
+    recorder_url, is_ready = await _get_recorder_url(str(camera_id))
     if not recorder_url:
         return {"recording": False, "status": "no_recorder", "message": "Recorder not deployed"}
+    if not is_ready:
+        return {"recording": False, "status": "deploying", "message": "Recorder service still deploying"}
     
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -647,7 +666,7 @@ async def start_recording(
     if camera.status != CameraStatus.RUNNING.value:
         raise HTTPException(status_code=400, detail="Camera is not running")
     
-    recorder_url = await _get_recorder_url(str(camera_id))
+    recorder_url, is_ready = await _get_recorder_url(str(camera_id))
     
     # Auto-deploy recorder if not present
     if not recorder_url:
@@ -660,14 +679,18 @@ async def start_recording(
             import asyncio
             for _ in range(30):  # Wait up to 30 seconds
                 await asyncio.sleep(1)
-                recorder_url = await _get_recorder_url(str(camera_id))
-                if recorder_url:
+                recorder_url, is_ready = await _get_recorder_url(str(camera_id))
+                if recorder_url and is_ready:
                     break
             
             if not recorder_url:
                 raise HTTPException(status_code=500, detail="Recorder deployed but not ready yet, try again")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to deploy recorder: {e}")
+    
+    # Check if recorder pod is ready
+    if not is_ready:
+        raise HTTPException(status_code=503, detail="Recorder service still deploying, please wait")
     
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -691,9 +714,11 @@ async def stop_recording(
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
     
-    recorder_url = await _get_recorder_url(str(camera_id))
+    recorder_url, is_ready = await _get_recorder_url(str(camera_id))
     if not recorder_url:
         raise HTTPException(status_code=400, detail="Recorder not deployed")
+    if not is_ready:
+        raise HTTPException(status_code=503, detail="Recorder service still deploying")
     
     try:
         async with httpx.AsyncClient(timeout=10) as client:
