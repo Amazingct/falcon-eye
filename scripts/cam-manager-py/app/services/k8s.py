@@ -136,34 +136,60 @@ def generate_service(camera: Camera, deployment_name: str) -> tuple[dict, str]:
 
 
 async def create_camera_deployment(camera: Camera) -> dict:
-    """Create K8s deployment and service for a camera"""
+    """Create K8s deployment and service for a camera (handles conflicts by replacing)"""
     deployment, deployment_name = generate_deployment(camera)
     service, service_name = generate_service(camera, deployment_name)
     
     try:
-        # Create deployment
-        apps_api.create_namespaced_deployment(
-            namespace=settings.k8s_namespace,
-            body=deployment,
-        )
-        logger.info(f"Created deployment: {deployment_name}")
+        # Try to create deployment, replace if exists
+        try:
+            apps_api.create_namespaced_deployment(
+                namespace=settings.k8s_namespace,
+                body=deployment,
+            )
+            logger.info(f"Created deployment: {deployment_name}")
+        except ApiException as e:
+            if e.status == 409:  # Conflict - already exists
+                logger.info(f"Deployment {deployment_name} exists, replacing...")
+                apps_api.replace_namespaced_deployment(
+                    name=deployment_name,
+                    namespace=settings.k8s_namespace,
+                    body=deployment,
+                )
+                logger.info(f"Replaced deployment: {deployment_name}")
+            else:
+                raise
         
-        # Create service
-        created_service = core_api.create_namespaced_service(
-            namespace=settings.k8s_namespace,
-            body=service,
-        )
-        
-        # Extract NodePorts
+        # Try to create service, get existing if conflict
         stream_port = None
         control_port = None
-        for port in created_service.spec.ports:
-            if port.name == "stream":
-                stream_port = port.node_port
-            elif port.name == "control":
-                control_port = port.node_port
-        
-        logger.info(f"Created service: {service_name} (stream: {stream_port}, control: {control_port})")
+        try:
+            created_service = core_api.create_namespaced_service(
+                namespace=settings.k8s_namespace,
+                body=service,
+            )
+            # Extract NodePorts from newly created service
+            for port in created_service.spec.ports:
+                if port.name == "stream":
+                    stream_port = port.node_port
+                elif port.name == "control":
+                    control_port = port.node_port
+            logger.info(f"Created service: {service_name} (stream: {stream_port}, control: {control_port})")
+        except ApiException as e:
+            if e.status == 409:  # Service exists, read it
+                logger.info(f"Service {service_name} exists, reading...")
+                existing_service = core_api.read_namespaced_service(
+                    name=service_name,
+                    namespace=settings.k8s_namespace,
+                )
+                for port in existing_service.spec.ports:
+                    if port.name == "stream":
+                        stream_port = port.node_port
+                    elif port.name == "control":
+                        control_port = port.node_port
+                logger.info(f"Using existing service: {service_name} (stream: {stream_port}, control: {control_port})")
+            else:
+                raise
         
         return {
             "deployment_name": deployment_name,
