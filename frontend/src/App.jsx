@@ -17,6 +17,7 @@ function App() {
   const [selectedCamera, setSelectedCamera] = useState(null)
   const [showChat, setShowChat] = useState(false)
   const [chatDocked, setChatDocked] = useState(true)
+  const [chatWidth, setChatWidth] = useState(450)
 
   // Fetch cameras
   const fetchCameras = async () => {
@@ -95,8 +96,13 @@ function App() {
     }
   }
 
+  // Calculate margin for layout when chat is docked
+  const chatMargin = showChat && chatDocked ? chatWidth : 0
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
+    <div className="min-h-screen bg-gray-900 text-white flex">
+      {/* Main content area - shrinks when chat is docked */}
+      <div className="flex-1 flex flex-col min-w-0 transition-all duration-200" style={{ marginRight: chatMargin ? `${chatMargin}px` : 0 }}>
       {/* Header */}
       <header className="bg-gray-800 border-b border-gray-700">
         <div className="max-w-7xl mx-auto px-4 py-4">
@@ -312,13 +318,16 @@ function App() {
           }}
         />
       )}
+      </div>
 
-      {/* Chat Widget */}
+      {/* Chat Widget - docked version is part of flex layout */}
       <ChatWidget 
         isOpen={showChat}
         onToggle={() => setShowChat(!showChat)}
         isDocked={chatDocked}
         onDockToggle={() => setChatDocked(!chatDocked)}
+        panelWidth={chatWidth}
+        onWidthChange={setChatWidth}
       />
     </div>
   )
@@ -1465,14 +1474,13 @@ function SettingsModal({ onClose, onClearAll }) {
 }
 
 // Chat Widget Component
-function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
+function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWidthChange }) {
   const [sessions, setSessions] = useState([])
   const [currentSession, setCurrentSession] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [chatStatus, setChatStatus] = useState(null)
-  const [dockedWidth, setDockedWidth] = useState(450)
   const [isResizing, setIsResizing] = useState(false)
   const [showSessions, setShowSessions] = useState(false)
   const [editingName, setEditingName] = useState(null)
@@ -1501,7 +1509,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
     if (!isResizing) return
     const handleMouseMove = (e) => {
       const newWidth = window.innerWidth - e.clientX
-      setDockedWidth(Math.min(800, Math.max(350, newWidth)))
+      onWidthChange?.(Math.min(800, Math.max(350, newWidth)))
     }
     const handleMouseUp = () => setIsResizing(false)
     document.addEventListener('mousemove', handleMouseMove)
@@ -1679,7 +1687,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
     : "fixed bottom-6 right-6 w-[450px] h-[550px] bg-gray-800 rounded-lg border border-gray-700 shadow-xl z-50 flex"
 
   return (
-    <div className={panelClasses} style={isDocked ? { width: `${dockedWidth}px` } : undefined}>
+    <div className={panelClasses} style={isDocked ? { width: `${panelWidth}px` } : undefined}>
       {isDocked && (
         <div className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-500 transition-colors" onMouseDown={(e) => { e.preventDefault(); setIsResizing(true) }} />
       )}
