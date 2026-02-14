@@ -319,6 +319,18 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }
                 <p className="text-sm text-gray-400">Click Edit to configure</p>
                 <p className="text-xs text-gray-500">then Start to begin streaming</p>
               </div>
+            ) : camera.status === 'error' ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4 bg-red-900/20">
+                <AlertCircle className="h-10 w-10 text-red-500 mb-2" />
+                <p className="text-sm text-red-400 font-medium">Error</p>
+                {camera.metadata?.error && (
+                  <p className="text-xs text-red-300/80 mt-1 px-2 max-w-full break-words" title={camera.metadata.error}>
+                    {camera.metadata.error.length > 80 
+                      ? camera.metadata.error.substring(0, 80) + '...' 
+                      : camera.metadata.error}
+                  </p>
+                )}
+              </div>
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
                 <WifiOff className="h-12 w-12 text-gray-600" />
@@ -432,16 +444,25 @@ function CameraList({ cameras, onDelete, onToggle, onEdit, onRestart }) {
               </td>
               <td className="px-4 py-3 text-gray-400">{camera.node_name}</td>
               <td className="px-4 py-3">
-                <span className={`inline-flex items-center space-x-1 ${
-                  camera.status === 'running' ? 'text-green-400' : 
-                  isCreating(camera) ? 'text-blue-400' :
-                  camera.status === 'deleting' ? 'text-yellow-400' : 'text-red-400'
-                }`}>
-                  {camera.status === 'running' ? <CheckCircle className="h-4 w-4" /> : 
-                   isBusy(camera) ? <Loader2 className="h-4 w-4 animate-spin" /> : 
-                   <AlertCircle className="h-4 w-4" />}
-                  <span>{isCreating(camera) ? 'adding...' : camera.status}</span>
-                </span>
+                <div className="flex flex-col">
+                  <span className={`inline-flex items-center space-x-1 ${
+                    camera.status === 'running' ? 'text-green-400' : 
+                    isCreating(camera) ? 'text-blue-400' :
+                    camera.status === 'deleting' ? 'text-yellow-400' : 
+                    camera.status === 'stopped' ? 'text-gray-400' : 'text-red-400'
+                  }`}>
+                    {camera.status === 'running' ? <CheckCircle className="h-4 w-4" /> : 
+                     isBusy(camera) ? <Loader2 className="h-4 w-4 animate-spin" /> : 
+                     camera.status === 'stopped' ? <Settings className="h-4 w-4" /> :
+                     <AlertCircle className="h-4 w-4" />}
+                    <span>{isCreating(camera) ? 'adding...' : camera.status}</span>
+                  </span>
+                  {camera.status === 'error' && camera.metadata?.error && (
+                    <span className="text-xs text-red-300/70 truncate max-w-[200px]" title={camera.metadata.error}>
+                      {camera.metadata.error}
+                    </span>
+                  )}
+                </div>
               </td>
               <td className="px-4 py-3">
                 <div className="flex items-center space-x-2">
