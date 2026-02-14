@@ -128,16 +128,34 @@ async def stream_chat(
     if tools:
         llm = llm.bind_tools(tools)
     
+    def extract_text(content) -> str:
+        """Extract text from content (string or list of blocks)"""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            # Extract text from content blocks
+            texts = []
+            for block in content:
+                if isinstance(block, str):
+                    texts.append(block)
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    texts.append(block.get("text", ""))
+            return "".join(texts)
+        return ""
+    
     # Stream the response - collect chunks to check for tool calls
-    collected_chunks = []
+    collected_text = []
     tool_calls = []
     
     async for chunk in llm.astream(lc_messages):
-        collected_chunks.append(chunk)
-        
         # Stream text content immediately (token by token)
         if hasattr(chunk, "content") and chunk.content:
-            yield chunk.content
+            text = extract_text(chunk.content)
+            if text:
+                collected_text.append(text)
+                yield text
         
         # Collect tool calls (they come in the stream too)
         if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
@@ -160,10 +178,7 @@ async def stream_chat(
         tools_by_name = {t.name: t for t in tools} if tools else {}
         
         # Build the AI message with tool calls for history
-        ai_message_content = "".join(
-            c.content for c in collected_chunks 
-            if hasattr(c, "content") and c.content
-        )
+        ai_message_content = "".join(collected_text)
         ai_tool_calls = [
             {"name": tc["name"], "args": tc["args"], "id": tc["id"]}
             for tc in tool_calls if tc["name"]
@@ -212,4 +227,6 @@ async def stream_chat(
         # Stream the final response with tool results
         async for chunk in llm.astream(lc_messages):
             if hasattr(chunk, "content") and chunk.content:
-                yield chunk.content
+                text = extract_text(chunk.content)
+                if text:
+                    yield text
