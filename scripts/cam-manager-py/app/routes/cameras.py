@@ -636,7 +636,7 @@ async def start_recording(
     camera_id: UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Start recording for a camera"""
+    """Start recording for a camera. Auto-deploys recorder if not present."""
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     camera = result.scalar_one_or_none()
     
@@ -647,8 +647,26 @@ async def start_recording(
         raise HTTPException(status_code=400, detail="Camera is not running")
     
     recorder_url = await _get_recorder_url(str(camera_id))
+    
+    # Auto-deploy recorder if not present
     if not recorder_url:
-        raise HTTPException(status_code=400, detail="Recorder not deployed")
+        if not camera.stream_port:
+            raise HTTPException(status_code=400, detail="Camera has no stream port")
+        
+        try:
+            await k8s.create_recorder_deployment(camera, camera.stream_port)
+            # Wait for recorder to be ready
+            import asyncio
+            for _ in range(30):  # Wait up to 30 seconds
+                await asyncio.sleep(1)
+                recorder_url = await _get_recorder_url(str(camera_id))
+                if recorder_url:
+                    break
+            
+            if not recorder_url:
+                raise HTTPException(status_code=500, detail="Recorder deployed but not ready yet, try again")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to deploy recorder: {e}")
     
     try:
         async with httpx.AsyncClient(timeout=10) as client:
