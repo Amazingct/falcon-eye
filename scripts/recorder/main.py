@@ -145,20 +145,37 @@ async def start_recording() -> StartResponse:
         recording_id = f"{CAMERA_ID}_{start_time.strftime('%Y%m%d%H%M%S')}"
         
         # FFmpeg command to record from stream
-        # -i: input stream
-        # -c copy: copy codecs (no re-encoding, fast)
-        # -t: max duration
-        # -movflags +faststart: optimize for web playback
-        cmd = [
-            "ffmpeg",
-            "-y",  # Overwrite output
-            "-i", STREAM_URL,
-            "-c", "copy",  # No re-encoding
-            "-t", str(SEGMENT_DURATION),  # Max duration
-            "-movflags", "+faststart",  # Web-optimized
-            "-f", "mp4",
-            file_path,
-        ]
+        # Detect stream type and use appropriate settings
+        is_mjpeg = STREAM_URL.endswith("/") or "mjpeg" in STREAM_URL.lower()
+        
+        if is_mjpeg:
+            # MJPEG stream (from Motion) - need to re-encode to H.264
+            cmd = [
+                "ffmpeg",
+                "-y",  # Overwrite output
+                "-f", "mjpeg",  # Input format
+                "-i", STREAM_URL,
+                "-c:v", "libx264",  # Encode to H.264
+                "-preset", "ultrafast",  # Fast encoding
+                "-crf", "23",  # Quality (lower = better, 18-28 typical)
+                "-t", str(SEGMENT_DURATION),  # Max duration
+                "-movflags", "+faststart",  # Web-optimized
+                "-f", "mp4",
+                file_path,
+            ]
+        else:
+            # HLS/RTSP stream - can often copy codecs
+            cmd = [
+                "ffmpeg",
+                "-y",  # Overwrite output
+                "-rtsp_transport", "tcp",  # Use TCP for RTSP (more reliable)
+                "-i", STREAM_URL,
+                "-c", "copy",  # No re-encoding (fast)
+                "-t", str(SEGMENT_DURATION),  # Max duration
+                "-movflags", "+faststart",  # Web-optimized
+                "-f", "mp4",
+                file_path,
+            ]
         
         try:
             # Start FFmpeg process

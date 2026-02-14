@@ -311,10 +311,21 @@ async def create_camera_deployment(camera: Camera) -> dict:
 
 async def create_recorder_deployment(camera: Camera, stream_port: int, node_ip: str = None) -> dict:
     """Create K8s deployment for camera recorder"""
-    # Build stream URL - always use internal ClusterIP service (NodePort not reliably accessible from pods)
+    # Build stream URL based on camera protocol
     name_slug = camera.name.lower().replace(" ", "-").replace("_", "-")
     name_slug = "".join(c for c in name_slug if c.isalnum() or c == "-")
-    stream_url = f"http://svc-{name_slug}.{settings.k8s_namespace}.svc.cluster.local:8081/hls/stream.m3u8"
+    
+    # USB cameras use Motion which serves MJPEG at root
+    # Network cameras (RTSP/ONVIF) - record directly from source URL for best quality
+    if camera.protocol == "usb":
+        # Motion MJPEG stream
+        stream_url = f"http://svc-{name_slug}.{settings.k8s_namespace}.svc.cluster.local:8081/"
+    elif camera.source_url:
+        # Use direct source URL for network cameras (RTSP/ONVIF)
+        stream_url = camera.source_url
+    else:
+        # Fallback to internal service
+        stream_url = f"http://svc-{name_slug}.{settings.k8s_namespace}.svc.cluster.local:8081/"
     
     deployment, deployment_name = generate_recorder_deployment(camera, stream_url)
     service, service_name = generate_recorder_service(camera, deployment_name)
