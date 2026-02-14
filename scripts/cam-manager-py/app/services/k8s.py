@@ -86,8 +86,9 @@ def generate_deployment(camera: Camera) -> tuple[dict, str]:
             "hostPath": {"path": camera.device_path or "/dev/video0"},
         }]
     
-    # Add node selector and tolerations for specific nodes
-    if camera.node_name:
+    # Add node selector and tolerations ONLY for USB cameras (they need specific nodes)
+    # Network cameras (rtsp, onvif, http) can run anywhere
+    if camera.protocol == "usb" and camera.node_name and camera.node_name != "LAN":
         deployment["spec"]["template"]["spec"]["nodeSelector"] = {
             "kubernetes.io/hostname": camera.node_name,
         }
