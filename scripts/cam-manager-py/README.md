@@ -153,9 +153,8 @@ cam-manager-py/
 │       └── cleanup.py    # Orphan pod cleanup
 ├── k8s/
 │   └── cam-manager.yaml  # K8s manifests
-├── pyproject.toml        # Poetry config
-├── poetry.lock           # Locked dependencies
-├── requirements.txt      # Legacy pip support
+├── pyproject.toml        # Poetry config (local dev)
+├── requirements.txt      # Dependencies (Docker builds)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
