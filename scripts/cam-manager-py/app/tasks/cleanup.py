@@ -69,7 +69,7 @@ def delete_orphan_deployment(camera_id: str):
     apps_api = client.AppsV1Api()
     core_api = client.CoreV1Api()
     
-    # Find and delete deployment
+    # Find and delete camera deployment
     try:
         deployments = apps_api.list_namespaced_deployment(
             namespace=K8S_NAMESPACE,
@@ -85,7 +85,7 @@ def delete_orphan_deployment(camera_id: str):
         if e.status != 404:
             logger.error(f"Error deleting deployment: {e}")
     
-    # Find and delete service
+    # Find and delete camera service
     try:
         services = core_api.list_namespaced_service(
             namespace=K8S_NAMESPACE,
@@ -100,6 +100,101 @@ def delete_orphan_deployment(camera_id: str):
     except ApiException as e:
         if e.status != 404:
             logger.error(f"Error deleting service: {e}")
+    
+    # Find and delete recorder deployment (uses recorder-for label)
+    try:
+        deployments = apps_api.list_namespaced_deployment(
+            namespace=K8S_NAMESPACE,
+            label_selector=f"recorder-for={camera_id}"
+        )
+        for dep in deployments.items:
+            logger.info(f"Deleting orphan recorder deployment: {dep.metadata.name}")
+            apps_api.delete_namespaced_deployment(
+                name=dep.metadata.name,
+                namespace=K8S_NAMESPACE
+            )
+    except ApiException as e:
+        if e.status != 404:
+            logger.error(f"Error deleting recorder deployment: {e}")
+    
+    # Find and delete recorder service
+    try:
+        services = core_api.list_namespaced_service(
+            namespace=K8S_NAMESPACE,
+            label_selector=f"recorder-for={camera_id}"
+        )
+        for svc in services.items:
+            logger.info(f"Deleting orphan recorder service: {svc.metadata.name}")
+            core_api.delete_namespaced_service(
+                name=svc.metadata.name,
+                namespace=K8S_NAMESPACE
+            )
+    except ApiException as e:
+        if e.status != 404:
+            logger.error(f"Error deleting recorder service: {e}")
+
+
+def cleanup_all_stale_resources(db_camera_ids: set[str]):
+    """Clean up ALL stale K8s resources not registered to any camera"""
+    load_k8s_config()
+    apps_api = client.AppsV1Api()
+    core_api = client.CoreV1Api()
+    
+    # Clean up stale camera deployments
+    try:
+        deployments = apps_api.list_namespaced_deployment(
+            namespace=K8S_NAMESPACE,
+            label_selector="component=camera"
+        )
+        for dep in deployments.items:
+            camera_id = dep.metadata.labels.get("camera-id")
+            if camera_id and camera_id not in db_camera_ids:
+                logger.info(f"Deleting stale camera deployment: {dep.metadata.name} (camera {camera_id})")
+                apps_api.delete_namespaced_deployment(name=dep.metadata.name, namespace=K8S_NAMESPACE)
+    except ApiException as e:
+        logger.error(f"Error cleaning camera deployments: {e}")
+    
+    # Clean up stale camera services
+    try:
+        services = core_api.list_namespaced_service(
+            namespace=K8S_NAMESPACE,
+            label_selector="component=camera"
+        )
+        for svc in services.items:
+            camera_id = svc.metadata.labels.get("camera-id")
+            if camera_id and camera_id not in db_camera_ids:
+                logger.info(f"Deleting stale camera service: {svc.metadata.name} (camera {camera_id})")
+                core_api.delete_namespaced_service(name=svc.metadata.name, namespace=K8S_NAMESPACE)
+    except ApiException as e:
+        logger.error(f"Error cleaning camera services: {e}")
+    
+    # Clean up stale recorder deployments
+    try:
+        deployments = apps_api.list_namespaced_deployment(
+            namespace=K8S_NAMESPACE,
+            label_selector="component=recorder"
+        )
+        for dep in deployments.items:
+            camera_id = dep.metadata.labels.get("recorder-for")
+            if camera_id and camera_id not in db_camera_ids:
+                logger.info(f"Deleting stale recorder deployment: {dep.metadata.name} (camera {camera_id})")
+                apps_api.delete_namespaced_deployment(name=dep.metadata.name, namespace=K8S_NAMESPACE)
+    except ApiException as e:
+        logger.error(f"Error cleaning recorder deployments: {e}")
+    
+    # Clean up stale recorder services
+    try:
+        services = core_api.list_namespaced_service(
+            namespace=K8S_NAMESPACE,
+            label_selector="component=recorder"
+        )
+        for svc in services.items:
+            camera_id = svc.metadata.labels.get("recorder-for")
+            if camera_id and camera_id not in db_camera_ids:
+                logger.info(f"Deleting stale recorder service: {svc.metadata.name} (camera {camera_id})")
+                core_api.delete_namespaced_service(name=svc.metadata.name, namespace=K8S_NAMESPACE)
+    except ApiException as e:
+        logger.error(f"Error cleaning recorder services: {e}")
 
 
 def get_running_recorder_camera_ids() -> set[str]:
@@ -173,40 +268,24 @@ async def fix_orphaned_recordings():
 
 async def cleanup_orphans():
     """Main cleanup function"""
+    logger.info("=" * 50)
     logger.info("Starting cleanup task...")
+    logger.info("=" * 50)
     
-    # Fix orphaned recordings first
+    # 1. Fix orphaned recordings first
     await fix_orphaned_recordings()
     
-    logger.info("Checking for orphan pods...")
-    
-    # Get camera IDs from database
+    # 2. Get camera IDs from database
     db_camera_ids = await get_db_camera_ids()
     logger.info(f"Found {len(db_camera_ids)} cameras in database")
     
-    # Get camera pods from K8s
-    k8s_pods = get_k8s_camera_pods()
-    logger.info(f"Found {len(k8s_pods)} camera pods in K8s")
+    # 3. Clean up ALL stale K8s resources (deployments + services for cameras + recorders)
+    logger.info("Cleaning up stale K8s resources...")
+    cleanup_all_stale_resources(db_camera_ids)
     
-    # Find orphans (in K8s but not in DB)
-    orphan_camera_ids = set()
-    for pod in k8s_pods:
-        if pod["camera_id"] and pod["camera_id"] not in db_camera_ids:
-            orphan_camera_ids.add(pod["camera_id"])
-    
-    if not orphan_camera_ids:
-        logger.info("No orphan pods found")
-        logger.info("Cleanup complete")
-        return
-    
-    logger.info(f"Found {len(orphan_camera_ids)} orphan camera(s)")
-    
-    # Delete orphans
-    for camera_id in orphan_camera_ids:
-        logger.info(f"Cleaning up orphan camera: {camera_id}")
-        delete_orphan_deployment(camera_id)
-    
+    logger.info("=" * 50)
     logger.info("Cleanup complete")
+    logger.info("=" * 50)
 
 
 def main():

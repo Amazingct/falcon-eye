@@ -463,8 +463,8 @@ EOF
 deploy_cleanup_cronjob() {
     echo -e "${YELLOW}[8/8] Deploying cleanup CronJob...${NC}"
     
-    # Get cleanup interval from ConfigMap or use default
-    CLEANUP_INTERVAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLEANUP_INTERVAL}' 2>/dev/null || echo "*/10 * * * *")
+    # Get cleanup interval from ConfigMap or use default (every 2 minutes)
+    CLEANUP_INTERVAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLEANUP_INTERVAL}' 2>/dev/null || echo "*/2 * * * *")
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
