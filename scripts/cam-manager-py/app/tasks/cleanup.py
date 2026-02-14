@@ -12,7 +12,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Config from environment
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://falcon:falcon-eye-2026@localhost:5432/falconeye")
+_raw_db_url = os.getenv("DATABASE_URL", "postgresql+asyncpg://falcon:falcon-eye-2026@localhost:5432/falconeye")
+# Ensure async driver is used
+if _raw_db_url.startswith("postgresql://"):
+    DATABASE_URL = _raw_db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+else:
+    DATABASE_URL = _raw_db_url
 K8S_NAMESPACE = os.getenv("K8S_NAMESPACE", "falcon-eye")
 
 
