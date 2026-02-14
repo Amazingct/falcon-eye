@@ -814,6 +814,7 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
             name: cam.name,
             protocol: cam.protocol,
             source_url: cam.url,
+            node_name: cam.node_name || 'LAN',
           })
         }
       }
@@ -856,7 +857,7 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
 
   const allCameras = [
     ...cameras.map(c => ({ ...c, key: `usb:${c.node_name}:${c.device_path}`, type: 'USB' })),
-    ...networkCameras.map(c => ({ ...c, key: `net:${c.ip}:${c.port}`, type: c.protocol.toUpperCase(), device_name: c.name, node_name: c.ip }))
+    ...networkCameras.map(c => ({ ...c, key: `net:${c.ip}:${c.port}`, type: c.protocol.toUpperCase(), device_name: c.name, node_name: c.node_name || 'LAN' }))
   ]
   const totalCameras = allCameras.length
 

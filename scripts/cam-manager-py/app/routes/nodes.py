@@ -26,6 +26,7 @@ class NetworkCamera(BaseModel):
     protocol: str  # rtsp, onvif, http
     name: str
     url: Optional[str] = None
+    node_name: str = "LAN"
 
 
 class ScanResult(BaseModel):
@@ -142,15 +143,16 @@ async def _scan_network_cameras(subnet: str) -> tuple[list[NetworkCamera], list[
                     return NetworkCamera(
                         ip=ip, port=port, protocol="rtsp",
                         name=f"Camera {ip}",
-                        url=f"rtsp://{ip}:{port}/stream1"
+                        url=f"rtsp://{ip}:{port}/stream1",
+                        node_name="LAN"
                     )
                 elif protocol == "onvif":
                     # ONVIF cameras stream via RTSP - use common RTSP URL patterns
-                    # Most ONVIF cameras use port 554 for RTSP
                     return NetworkCamera(
                         ip=ip, port=554, protocol="rtsp",
                         name=f"IP Camera {ip}",
-                        url=f"rtsp://{ip}:554/Streaming/Channels/101"  # Common Hikvision/generic pattern
+                        url=f"rtsp://{ip}:554/Streaming/Channels/101",
+                        node_name="LAN"
                     )
         except:
             pass
