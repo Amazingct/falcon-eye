@@ -237,10 +237,9 @@ function App() {
         <ScanCamerasModal
           nodes={nodes}
           onClose={() => setShowScanModal(false)}
-          onAdd={(camera) => {
+          onAdded={(count) => {
             setShowScanModal(false)
-            // Pre-fill add modal with scanned camera
-            setShowAddModal(true)
+            fetchCameras()
           }}
         />
       )}
@@ -725,23 +724,32 @@ function EditCameraModal({ camera, onClose, onSave }) {
 }
 
 // Scan Cameras Modal
-function ScanCamerasModal({ nodes, onClose, onAdd }) {
+function ScanCamerasModal({ nodes, onClose, onAdded }) {
   const [scanning, setScanning] = useState(false)
   const [cameras, setCameras] = useState([])
+  const [networkCameras, setNetworkCameras] = useState([])
   const [scannedNodes, setScannedNodes] = useState([])
   const [errors, setErrors] = useState([])
-  const [adding, setAdding] = useState(null)
+  const [selected, setSelected] = useState(new Set())
+  const [adding, setAdding] = useState(false)
+  const [scanNetwork, setScanNetwork] = useState(false)
 
   const scanCameras = async () => {
     setScanning(true)
     setCameras([])
+    setNetworkCameras([])
     setErrors([])
+    setSelected(new Set())
     
     try {
-      const res = await fetch(`${API_URL}/nodes/scan/cameras`)
+      const url = scanNetwork 
+        ? `${API_URL}/nodes/scan/cameras?network=true`
+        : `${API_URL}/nodes/scan/cameras`
+      const res = await fetch(url)
       if (!res.ok) throw new Error('Scan failed')
       const data = await res.json()
       setCameras(data.cameras || [])
+      setNetworkCameras(data.network_cameras || [])
       setScannedNodes(data.scanned_nodes || [])
       setErrors(data.errors || [])
     } catch (err) {
@@ -751,30 +759,82 @@ function ScanCamerasModal({ nodes, onClose, onAdd }) {
     }
   }
 
-  const addCamera = async (cam) => {
-    setAdding(cam.device_path)
-    try {
-      const res = await fetch(`${API_URL}/cameras/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: cam.device_name.replace(/[^a-zA-Z0-9\s]/g, '').trim() || 'USB Camera',
-          protocol: 'usb',
-          node_name: cam.node_name,
-          device_path: cam.device_path,
-        }),
-      })
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.detail || 'Failed to add camera')
+  const toggleSelect = (key) => {
+    const newSelected = new Set(selected)
+    if (newSelected.has(key)) {
+      newSelected.delete(key)
+    } else {
+      newSelected.add(key)
+    }
+    setSelected(newSelected)
+  }
+
+  const selectAll = () => {
+    const allKeys = [
+      ...cameras.map(c => `usb:${c.node_name}:${c.device_path}`),
+      ...networkCameras.map(c => `net:${c.ip}:${c.port}`)
+    ]
+    setSelected(new Set(allKeys))
+  }
+
+  const addSelected = async () => {
+    if (selected.size === 0) return
+    setAdding(true)
+    
+    const toAdd = []
+    for (const key of selected) {
+      if (key.startsWith('usb:')) {
+        const [, nodeName, devicePath] = key.split(':')
+        const cam = cameras.find(c => c.node_name === nodeName && c.device_path === devicePath)
+        if (cam) {
+          toAdd.push({
+            name: cam.device_name.replace(/[^a-zA-Z0-9\s]/g, '').trim() || `USB Camera ${nodeName}`,
+            protocol: 'usb',
+            node_name: cam.node_name,
+            device_path: cam.device_path,
+          })
+        }
+      } else if (key.startsWith('net:')) {
+        const [, ip, port] = key.split(':')
+        const cam = networkCameras.find(c => c.ip === ip && c.port === parseInt(port))
+        if (cam) {
+          toAdd.push({
+            name: cam.name,
+            protocol: cam.protocol,
+            source_url: cam.url,
+          })
+        }
       }
-      // Remove from list
-      setCameras(cameras.filter(c => c.device_path !== cam.device_path || c.node_name !== cam.node_name))
-      onAdd(cam)
-    } catch (err) {
-      setErrors([...errors, err.message])
-    } finally {
-      setAdding(null)
+    }
+    
+    let successCount = 0
+    const newErrors = []
+    
+    for (const camera of toAdd) {
+      try {
+        const res = await fetch(`${API_URL}/cameras/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(camera),
+        })
+        if (res.ok) {
+          successCount++
+        } else {
+          const data = await res.json()
+          newErrors.push(`${camera.name}: ${data.detail || 'Failed'}`)
+        }
+      } catch (err) {
+        newErrors.push(`${camera.name}: ${err.message}`)
+      }
+    }
+    
+    setAdding(false)
+    
+    if (successCount > 0) {
+      onAdded(successCount)
+    }
+    if (newErrors.length > 0) {
+      setErrors(newErrors)
     }
   }
 
@@ -782,17 +842,23 @@ function ScanCamerasModal({ nodes, onClose, onAdd }) {
     scanCameras()
   }, [])
 
+  const allCameras = [
+    ...cameras.map(c => ({ ...c, key: `usb:${c.node_name}:${c.device_path}`, type: 'USB' })),
+    ...networkCameras.map(c => ({ ...c, key: `net:${c.ip}:${c.port}`, type: c.protocol.toUpperCase(), device_name: c.name, node_name: c.ip }))
+  ]
+  const totalCameras = allCameras.length
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-gray-800 rounded-lg w-full max-w-lg mx-4 border border-gray-700">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
-          <h2 className="text-lg font-semibold">Scan for USB Cameras</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">×</button>
+          <h2 className="text-lg font-semibold">Scan for Cameras</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">×</button>
         </div>
         
         <div className="p-6">
           {errors.length > 0 && (
-            <div className="bg-red-500/10 border border-red-500 text-red-500 px-3 py-2 rounded text-sm mb-4">
+            <div className="bg-red-500/10 border border-red-500 text-red-500 px-3 py-2 rounded text-sm mb-4 max-h-24 overflow-y-auto">
               {errors.map((e, i) => <p key={i}>{e}</p>)}
             </div>
           )}
@@ -800,64 +866,119 @@ function ScanCamerasModal({ nodes, onClose, onAdd }) {
           {scanning ? (
             <div className="text-center py-8">
               <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-500 mb-4" />
-              <p className="text-gray-400">Scanning nodes for USB cameras...</p>
+              <p className="text-gray-400">Scanning for cameras...</p>
+              <p className="text-sm text-gray-500">This may take a moment</p>
             </div>
-          ) : cameras.length === 0 ? (
+          ) : totalCameras === 0 ? (
             <div className="text-center py-8">
               <Camera className="h-12 w-12 mx-auto text-gray-600 mb-4" />
-              <p className="text-gray-400 mb-4">No USB cameras found</p>
-              <p className="text-sm text-gray-500 mb-4">Scanned nodes: {scannedNodes.join(', ') || 'none'}</p>
+              <p className="text-gray-400 mb-2">No cameras found</p>
+              <p className="text-sm text-gray-500 mb-4">Scanned: {scannedNodes.join(', ') || 'none'}</p>
+              
+              <label className="flex items-center justify-center space-x-2 mb-4 text-sm">
+                <input
+                  type="checkbox"
+                  checked={scanNetwork}
+                  onChange={e => setScanNetwork(e.target.checked)}
+                  className="rounded bg-gray-700 border-gray-600"
+                />
+                <span className="text-gray-400">Also scan network (slower)</span>
+              </label>
+              
               <button
                 onClick={scanCameras}
-                className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition"
+                className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition"
               >
                 Scan Again
               </button>
             </div>
           ) : (
             <>
-              <p className="text-sm text-gray-400 mb-4">Found {cameras.length} camera(s) on {scannedNodes.length} node(s)</p>
-              <div className="space-y-3 max-h-64 overflow-y-auto">
-                {cameras.map((cam, i) => (
-                  <div key={i} className="flex items-center justify-between bg-gray-700/50 rounded-lg p-3">
-                    <div>
-                      <p className="font-medium">{cam.device_name}</p>
-                      <p className="text-sm text-gray-400">{cam.node_name} • {cam.device_path}</p>
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-sm text-gray-400">
+                  Found {totalCameras} camera(s) • {selected.size} selected
+                </p>
+                <button
+                  onClick={selectAll}
+                  className="text-sm text-blue-400 hover:text-blue-300"
+                >
+                  Select All
+                </button>
+              </div>
+              
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {allCameras.map((cam) => (
+                  <label
+                    key={cam.key}
+                    className={`flex items-center space-x-3 bg-gray-700/50 rounded-lg p-3 cursor-pointer hover:bg-gray-700 transition ${
+                      selected.has(cam.key) ? 'ring-2 ring-blue-500' : ''
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(cam.key)}
+                      onChange={() => toggleSelect(cam.key)}
+                      className="rounded bg-gray-600 border-gray-500 text-blue-500"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{cam.device_name || cam.name}</p>
+                      <p className="text-sm text-gray-400 truncate">
+                        {cam.node_name} • {cam.device_path || cam.url}
+                      </p>
                     </div>
-                    <button
-                      onClick={() => addCamera(cam)}
-                      disabled={adding === cam.device_path}
-                      className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-3 py-1.5 rounded-lg text-sm transition flex items-center space-x-1"
-                    >
-                      {adding === cam.device_path ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Plus className="h-4 w-4" />
-                          <span>Add</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
+                    <span className={`text-xs px-2 py-1 rounded ${
+                      cam.type === 'USB' ? 'bg-green-500/20 text-green-400' :
+                      cam.type === 'RTSP' ? 'bg-purple-500/20 text-purple-400' :
+                      'bg-orange-500/20 text-orange-400'
+                    }`}>
+                      {cam.type}
+                    </span>
+                  </label>
                 ))}
               </div>
-              <button
-                onClick={scanCameras}
-                className="w-full mt-4 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
-              >
-                <RefreshCw className="h-4 w-4" />
-                <span>Rescan</span>
-              </button>
+              
+              <div className="flex items-center space-x-3 mt-4">
+                <label className="flex items-center space-x-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={scanNetwork}
+                    onChange={e => setScanNetwork(e.target.checked)}
+                    className="rounded bg-gray-700 border-gray-600"
+                  />
+                  <span className="text-gray-400">Network scan</span>
+                </label>
+                <button
+                  onClick={scanCameras}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  <span>Rescan</span>
+                </button>
+              </div>
             </>
           )}
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-700">
+        <div className="px-6 py-4 border-t border-gray-700 flex space-x-3">
           <button
             onClick={onClose}
-            className="w-full px-4 py-2 text-gray-400 hover:text-white transition"
+            className="flex-1 px-4 py-2 text-gray-400 hover:text-white transition bg-gray-700 rounded-lg"
           >
-            Close
+            Cancel
+          </button>
+          <button
+            onClick={addSelected}
+            disabled={selected.size === 0 || adding}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
+          >
+            {adding ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <Plus className="h-4 w-4" />
+                <span>Add {selected.size > 0 ? `(${selected.size})` : ''}</span>
+              </>
+            )}
           </button>
         </div>
       </div>
