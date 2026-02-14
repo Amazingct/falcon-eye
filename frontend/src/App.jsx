@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff } from 'lucide-react'
+import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2 } from 'lucide-react'
 
 const API_URL = window.API_URL || '/api'
 
@@ -10,6 +10,8 @@ function App() {
   const [error, setError] = useState(null)
   const [viewMode, setViewMode] = useState('grid') // grid or list
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(null) // camera to edit
+  const [showScanModal, setShowScanModal] = useState(false)
   const [selectedCamera, setSelectedCamera] = useState(null)
 
   // Fetch cameras
@@ -105,6 +107,13 @@ function App() {
                 </button>
               </div>
               <button
+                onClick={() => setShowScanModal(true)}
+                className="flex items-center space-x-2 bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg transition"
+              >
+                <Search className="h-5 w-5" />
+                <span>Scan</span>
+              </button>
+              <button
                 onClick={() => setShowAddModal(true)}
                 className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition"
               >
@@ -179,12 +188,14 @@ function App() {
             onDelete={deleteCamera}
             onToggle={toggleCamera}
             onSelect={setSelectedCamera}
+            onEdit={setShowEditModal}
           />
         ) : (
           <CameraList
             cameras={cameras}
             onDelete={deleteCamera}
             onToggle={toggleCamera}
+            onEdit={setShowEditModal}
           />
         )}
       </main>
@@ -208,23 +219,50 @@ function App() {
           onClose={() => setSelectedCamera(null)}
         />
       )}
+
+      {/* Edit Camera Modal */}
+      {showEditModal && (
+        <EditCameraModal
+          camera={showEditModal}
+          onClose={() => setShowEditModal(null)}
+          onSave={() => {
+            setShowEditModal(null)
+            fetchCameras()
+          }}
+        />
+      )}
+
+      {/* Scan Cameras Modal */}
+      {showScanModal && (
+        <ScanCamerasModal
+          nodes={nodes}
+          onClose={() => setShowScanModal(false)}
+          onAdd={(camera) => {
+            setShowScanModal(false)
+            // Pre-fill add modal with scanned camera
+            setShowAddModal(true)
+          }}
+        />
+      )}
     </div>
   )
 }
 
 // Camera Grid Component
-function CameraGrid({ cameras, onDelete, onToggle, onSelect }) {
+function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
+  const isDeleting = (camera) => camera.status === 'deleting'
+  
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       {cameras.map(camera => (
         <div
           key={camera.id}
-          className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition"
+          className={`bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition ${isDeleting(camera) ? 'opacity-50' : ''}`}
         >
           {/* Stream Preview */}
           <div
             className="aspect-video bg-gray-900 relative cursor-pointer"
-            onClick={() => onSelect(camera)}
+            onClick={() => !isDeleting(camera) && onSelect(camera)}
           >
             {camera.status === 'running' ? (
               <img
@@ -236,6 +274,10 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect }) {
                   e.target.className = 'hidden'
                 }}
               />
+            ) : isDeleting(camera) ? (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="h-12 w-12 text-yellow-500 animate-spin" />
+              </div>
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
                 <WifiOff className="h-12 w-12 text-gray-600" />
@@ -244,10 +286,12 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect }) {
             {/* Status Badge */}
             <div className={`absolute top-2 right-2 px-2 py-1 rounded text-xs font-medium ${
               camera.status === 'running' 
-                ? 'bg-green-500/20 text-green-400' 
+                ? 'bg-green-500/20 text-green-400'
+                : camera.status === 'deleting'
+                ? 'bg-yellow-500/20 text-yellow-400'
                 : 'bg-red-500/20 text-red-400'
             }`}>
-              {camera.status === 'running' ? 'LIVE' : 'OFFLINE'}
+              {camera.status === 'running' ? 'LIVE' : camera.status === 'deleting' ? 'DELETING...' : 'OFFLINE'}
             </div>
           </div>
           
@@ -263,19 +307,31 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect }) {
             
             {/* Actions */}
             <div className="flex items-center justify-between">
-              <button
-                onClick={() => onToggle(camera)}
-                className={`p-2 rounded transition ${
-                  camera.status === 'running'
-                    ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
-                    : 'bg-green-500/20 hover:bg-green-500/30 text-green-400'
-                }`}
-              >
-                {camera.status === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => onToggle(camera)}
+                  disabled={isDeleting(camera)}
+                  className={`p-2 rounded transition ${
+                    isDeleting(camera) ? 'opacity-50 cursor-not-allowed' :
+                    camera.status === 'running'
+                      ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
+                      : 'bg-green-500/20 hover:bg-green-500/30 text-green-400'
+                  }`}
+                >
+                  {camera.status === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                </button>
+                <button
+                  onClick={() => onEdit(camera)}
+                  disabled={isDeleting(camera)}
+                  className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-blue-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Edit className="h-4 w-4" />
+                </button>
+              </div>
               <button
                 onClick={() => onDelete(camera.id)}
-                className="p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-red-400"
+                disabled={isDeleting(camera)}
+                className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-red-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -288,7 +344,9 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect }) {
 }
 
 // Camera List Component
-function CameraList({ cameras, onDelete, onToggle }) {
+function CameraList({ cameras, onDelete, onToggle, onEdit }) {
+  const isDeleting = (camera) => camera.status === 'deleting'
+  
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
       <table className="w-full">
@@ -303,7 +361,7 @@ function CameraList({ cameras, onDelete, onToggle }) {
         </thead>
         <tbody className="divide-y divide-gray-700">
           {cameras.map(camera => (
-            <tr key={camera.id} className="hover:bg-gray-700/30">
+            <tr key={camera.id} className={`hover:bg-gray-700/30 ${isDeleting(camera) ? 'opacity-50' : ''}`}>
               <td className="px-4 py-3 font-medium">{camera.name}</td>
               <td className="px-4 py-3">
                 <span className="bg-gray-700 px-2 py-1 rounded text-sm uppercase">{camera.protocol}</span>
@@ -311,9 +369,12 @@ function CameraList({ cameras, onDelete, onToggle }) {
               <td className="px-4 py-3 text-gray-400">{camera.node_name}</td>
               <td className="px-4 py-3">
                 <span className={`inline-flex items-center space-x-1 ${
-                  camera.status === 'running' ? 'text-green-400' : 'text-red-400'
+                  camera.status === 'running' ? 'text-green-400' : 
+                  camera.status === 'deleting' ? 'text-yellow-400' : 'text-red-400'
                 }`}>
-                  {camera.status === 'running' ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                  {camera.status === 'running' ? <CheckCircle className="h-4 w-4" /> : 
+                   camera.status === 'deleting' ? <Loader2 className="h-4 w-4 animate-spin" /> : 
+                   <AlertCircle className="h-4 w-4" />}
                   <span>{camera.status}</span>
                 </span>
               </td>
@@ -321,13 +382,22 @@ function CameraList({ cameras, onDelete, onToggle }) {
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => onToggle(camera)}
-                    className="p-1.5 rounded hover:bg-gray-600 transition"
+                    disabled={isDeleting(camera)}
+                    className={`p-1.5 rounded hover:bg-gray-600 transition ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     {camera.status === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                   </button>
                   <button
+                    onClick={() => onEdit(camera)}
+                    disabled={isDeleting(camera)}
+                    className={`p-1.5 rounded hover:bg-gray-600 transition text-blue-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <Edit className="h-4 w-4" />
+                  </button>
+                  <button
                     onClick={() => onDelete(camera.id)}
-                    className="p-1.5 rounded hover:bg-gray-600 transition text-red-400"
+                    disabled={isDeleting(camera)}
+                    className={`p-1.5 rounded hover:bg-gray-600 transition text-red-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -500,7 +570,7 @@ function CameraPreviewModal({ camera, onClose }) {
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
             <div>
               <h3 className="font-semibold">{camera.name}</h3>
-              <p className="text-sm text-gray-400">{camera.node}</p>
+              <p className="text-sm text-gray-400">{camera.node_name}</p>
             </div>
             <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl">×</button>
           </div>
@@ -520,6 +590,275 @@ function CameraPreviewModal({ camera, onClose }) {
               </div>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Edit Camera Modal
+function EditCameraModal({ camera, onClose, onSave }) {
+  const [form, setForm] = useState({
+    name: camera.name,
+    location: camera.location || '',
+    resolution: camera.resolution || '640x480',
+    framerate: camera.framerate || 15,
+  })
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState(null)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+
+    try {
+      const res = await fetch(`${API_URL}/cameras/${camera.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.detail || data.error || 'Failed to update camera')
+      }
+      onSave()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-gray-800 rounded-lg w-full max-w-md mx-4 border border-gray-700">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
+          <h2 className="text-lg font-semibold">Edit Camera</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">×</button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {error && (
+            <div className="bg-red-500/10 border border-red-500 text-red-500 px-3 py-2 rounded text-sm">
+              {error}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Camera Name</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })}
+              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Location</label>
+            <input
+              type="text"
+              value={form.location}
+              onChange={e => setForm({ ...form, location: e.target.value })}
+              placeholder="e.g., Living Room, Office"
+              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Resolution</label>
+              <select
+                value={form.resolution}
+                onChange={e => setForm({ ...form, resolution: e.target.value })}
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+              >
+                <option value="320x240">320x240</option>
+                <option value="640x480">640x480</option>
+                <option value="800x600">800x600</option>
+                <option value="1280x720">1280x720 (HD)</option>
+                <option value="1920x1080">1920x1080 (FHD)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Framerate</label>
+              <input
+                type="number"
+                value={form.framerate}
+                onChange={e => setForm({ ...form, framerate: parseInt(e.target.value) })}
+                min="1"
+                max="60"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="text-sm text-gray-400">
+            <p><strong>Type:</strong> {camera.protocol.toUpperCase()}</p>
+            <p><strong>Node:</strong> {camera.node_name}</p>
+            <p><strong>Device:</strong> {camera.device_path || camera.source_url}</p>
+          </div>
+
+          <div className="flex items-center justify-end space-x-3 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-gray-400 hover:text-white transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-4 py-2 rounded-lg transition flex items-center space-x-2"
+            >
+              {submitting && <RefreshCw className="h-4 w-4 animate-spin" />}
+              <span>{submitting ? 'Saving...' : 'Save Changes'}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// Scan Cameras Modal
+function ScanCamerasModal({ nodes, onClose, onAdd }) {
+  const [scanning, setScanning] = useState(false)
+  const [cameras, setCameras] = useState([])
+  const [scannedNodes, setScannedNodes] = useState([])
+  const [errors, setErrors] = useState([])
+  const [adding, setAdding] = useState(null)
+
+  const scanCameras = async () => {
+    setScanning(true)
+    setCameras([])
+    setErrors([])
+    
+    try {
+      const res = await fetch(`${API_URL}/nodes/scan/cameras`)
+      if (!res.ok) throw new Error('Scan failed')
+      const data = await res.json()
+      setCameras(data.cameras || [])
+      setScannedNodes(data.scanned_nodes || [])
+      setErrors(data.errors || [])
+    } catch (err) {
+      setErrors([err.message])
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const addCamera = async (cam) => {
+    setAdding(cam.device_path)
+    try {
+      const res = await fetch(`${API_URL}/cameras/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: cam.device_name.replace(/[^a-zA-Z0-9\s]/g, '').trim() || 'USB Camera',
+          protocol: 'usb',
+          node_name: cam.node_name,
+          device_path: cam.device_path,
+        }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.detail || 'Failed to add camera')
+      }
+      // Remove from list
+      setCameras(cameras.filter(c => c.device_path !== cam.device_path || c.node_name !== cam.node_name))
+      onAdd(cam)
+    } catch (err) {
+      setErrors([...errors, err.message])
+    } finally {
+      setAdding(null)
+    }
+  }
+
+  useEffect(() => {
+    scanCameras()
+  }, [])
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-gray-800 rounded-lg w-full max-w-lg mx-4 border border-gray-700">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
+          <h2 className="text-lg font-semibold">Scan for USB Cameras</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">×</button>
+        </div>
+        
+        <div className="p-6">
+          {errors.length > 0 && (
+            <div className="bg-red-500/10 border border-red-500 text-red-500 px-3 py-2 rounded text-sm mb-4">
+              {errors.map((e, i) => <p key={i}>{e}</p>)}
+            </div>
+          )}
+
+          {scanning ? (
+            <div className="text-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-500 mb-4" />
+              <p className="text-gray-400">Scanning nodes for USB cameras...</p>
+            </div>
+          ) : cameras.length === 0 ? (
+            <div className="text-center py-8">
+              <Camera className="h-12 w-12 mx-auto text-gray-600 mb-4" />
+              <p className="text-gray-400 mb-4">No USB cameras found</p>
+              <p className="text-sm text-gray-500 mb-4">Scanned nodes: {scannedNodes.join(', ') || 'none'}</p>
+              <button
+                onClick={scanCameras}
+                className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition"
+              >
+                Scan Again
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-gray-400 mb-4">Found {cameras.length} camera(s) on {scannedNodes.length} node(s)</p>
+              <div className="space-y-3 max-h-64 overflow-y-auto">
+                {cameras.map((cam, i) => (
+                  <div key={i} className="flex items-center justify-between bg-gray-700/50 rounded-lg p-3">
+                    <div>
+                      <p className="font-medium">{cam.device_name}</p>
+                      <p className="text-sm text-gray-400">{cam.node_name} • {cam.device_path}</p>
+                    </div>
+                    <button
+                      onClick={() => addCamera(cam)}
+                      disabled={adding === cam.device_path}
+                      className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-3 py-1.5 rounded-lg text-sm transition flex items-center space-x-1"
+                    >
+                      {adding === cam.device_path ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Plus className="h-4 w-4" />
+                          <span>Add</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={scanCameras}
+                className="w-full mt-4 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
+              >
+                <RefreshCw className="h-4 w-4" />
+                <span>Rescan</span>
+              </button>
+            </>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-700">
+          <button
+            onClick={onClose}
+            className="w-full px-4 py-2 text-gray-400 hover:text-white transition"
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>

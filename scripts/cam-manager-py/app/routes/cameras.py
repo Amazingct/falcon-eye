@@ -1,12 +1,13 @@
 """Camera API routes"""
+import asyncio
 from uuid import UUID, uuid4
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from sqlalchemy.exc import IntegrityError
 
-from app.database import get_db
+from app.database import get_db, get_db_session
 from app.config import get_settings
 from app.models.camera import Camera, CameraStatus
 from app.models.schemas import (
@@ -17,6 +18,9 @@ from app.services import k8s
 
 router = APIRouter(prefix="/api/cameras", tags=["cameras"])
 settings = get_settings()
+
+# Track cameras being deleted (device_path -> delete_time)
+_deleting_cameras: dict[str, float] = {}
 
 
 def enrich_camera_response(camera: Camera, k8s_status: Optional[dict] = None) -> dict:
@@ -114,6 +118,29 @@ async def create_camera(
             detail="source_url is required for this protocol"
         )
     
+    # Check if USB camera is being deleted
+    if camera_data.protocol == "usb" and camera_data.device_path:
+        device_key = f"{camera_data.node_name}:{camera_data.device_path}"
+        if device_key in _deleting_cameras:
+            raise HTTPException(
+                status_code=409,
+                detail="This camera is still being deleted. Please wait."
+            )
+        
+        # Also check database for any camera with same device on same node with deleting status
+        existing = await db.execute(
+            select(Camera).where(
+                Camera.node_name == camera_data.node_name,
+                Camera.device_path == camera_data.device_path,
+                Camera.status == CameraStatus.DELETING.value
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail="This camera is still being deleted. Please wait."
+            )
+    
     # Create camera record
     camera = Camera(
         id=uuid4(),
@@ -176,9 +203,43 @@ async def update_camera(
     return enrich_camera_response(camera)
 
 
+async def _background_delete_camera(
+    camera_id: UUID,
+    deployment_name: str,
+    service_name: str,
+    device_key: str,
+    is_usb: bool,
+):
+    """Background task to delete camera with grace period"""
+    import time
+    
+    try:
+        # Delete K8s resources
+        if deployment_name or service_name:
+            await k8s.delete_camera_deployment(deployment_name, service_name)
+        
+        # Wait for pod to fully terminate
+        await asyncio.sleep(5)
+        
+        # Extra grace period for USB cameras to release device
+        if is_usb:
+            await asyncio.sleep(15)
+        
+        # Delete from database
+        async with get_db_session() as db:
+            await db.execute(delete(Camera).where(Camera.id == camera_id))
+            await db.commit()
+        
+    finally:
+        # Remove from deleting tracker
+        if device_key and device_key in _deleting_cameras:
+            del _deleting_cameras[device_key]
+
+
 @router.delete("/{camera_id}", response_model=MessageResponse)
 async def delete_camera(
     camera_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a camera and its Kubernetes resources"""
@@ -188,18 +249,31 @@ async def delete_camera(
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
     
-    # Delete K8s resources
-    if camera.deployment_name or camera.service_name:
-        await k8s.delete_camera_deployment(
-            camera.deployment_name or "",
-            camera.service_name or "",
-        )
+    if camera.status == CameraStatus.DELETING.value:
+        raise HTTPException(status_code=400, detail="Camera is already being deleted")
     
-    # Delete from database
-    await db.execute(delete(Camera).where(Camera.id == camera_id))
+    # Mark as deleting
+    camera.status = CameraStatus.DELETING.value
     await db.commit()
     
-    return MessageResponse(message="Camera deleted", id=camera_id)
+    # Track USB device deletion
+    device_key = ""
+    is_usb = camera.protocol == "usb"
+    if is_usb and camera.device_path and camera.node_name:
+        device_key = f"{camera.node_name}:{camera.device_path}"
+        _deleting_cameras[device_key] = asyncio.get_event_loop().time()
+    
+    # Start background deletion
+    background_tasks.add_task(
+        _background_delete_camera,
+        camera_id,
+        camera.deployment_name or "",
+        camera.service_name or "",
+        device_key,
+        is_usb,
+    )
+    
+    return MessageResponse(message="Camera deletion started", id=camera_id)
 
 
 @router.post("/{camera_id}/restart", response_model=MessageResponse)

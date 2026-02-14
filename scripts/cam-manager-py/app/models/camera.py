@@ -22,6 +22,7 @@ class CameraStatus(str, enum.Enum):
     RUNNING = "running"
     ERROR = "error"
     STOPPED = "stopped"
+    DELETING = "deleting"
 
 
 class Camera(Base):
