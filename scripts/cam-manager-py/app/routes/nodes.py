@@ -4,7 +4,7 @@ Node management routes
 from fastapi import APIRouter
 from app.services.k8s import K8sService
 
-router = APIRouter(prefix="/nodes", tags=["nodes"])
+router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
 
 @router.get("")
