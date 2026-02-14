@@ -260,6 +260,15 @@ async def create_camera(
             camera.control_port = k8s_result["control_port"]
             camera.status = CameraStatus.RUNNING.value
             
+            # Also create recorder deployment
+            if camera.stream_port:
+                node_ip = settings.get_node_ip(camera.node_name)
+                try:
+                    await k8s.create_recorder_deployment(camera, camera.stream_port, node_ip)
+                except Exception as e:
+                    # Recorder failure is non-fatal, camera still works
+                    print(f"Failed to create recorder: {e}")
+            
         except Exception as e:
             camera.status = CameraStatus.ERROR.value
             camera.metadata = {**camera.metadata, "error": str(e)}
@@ -340,6 +349,12 @@ async def _background_delete_camera(
         if deployment_name or service_name:
             await k8s.delete_camera_deployment(deployment_name, service_name)
         
+        # Delete recorder deployment
+        try:
+            await k8s.delete_recorder_deployment(str(camera_id))
+        except Exception as e:
+            print(f"Failed to delete recorder: {e}")
+        
         # Wait for pod to fully terminate
         await asyncio.sleep(5)
         
@@ -347,7 +362,7 @@ async def _background_delete_camera(
         if is_usb:
             await asyncio.sleep(15)
         
-        # Delete from database
+        # Delete from database (cascades to recordings)
         async with get_db_session() as db:
             await db.execute(delete(Camera).where(Camera.id == camera_id))
             await db.commit()
@@ -472,6 +487,14 @@ async def start_camera(
         
         await db.commit()
         
+        # Also create recorder deployment
+        if camera.stream_port:
+            node_ip = settings.get_node_ip(camera.node_name)
+            try:
+                await k8s.create_recorder_deployment(camera, camera.stream_port, node_ip)
+            except Exception as e:
+                print(f"Failed to create recorder: {e}")
+        
         return MessageResponse(message="Camera started", id=camera_id)
         
     except Exception as e:
@@ -501,6 +524,12 @@ async def stop_camera(
             camera.deployment_name or "",
             camera.service_name or "",
         )
+    
+    # Also delete recorder
+    try:
+        await k8s.delete_recorder_deployment(str(camera.id))
+    except Exception as e:
+        print(f"Failed to delete recorder: {e}")
     
     camera.status = CameraStatus.STOPPED.value
     camera.deployment_name = None
@@ -539,3 +568,106 @@ async def get_stream_info(
         protocol=camera.protocol,
         status=camera.status,
     )
+
+
+# Recording control endpoints
+import httpx
+
+
+async def _get_recorder_url(camera_id: str) -> str:
+    """Get the recorder service URL for a camera"""
+    # Recorder service is internal ClusterIP
+    # Service name pattern: svc-rec-{name_slug}
+    # But we can use label selector to find it
+    try:
+        services = k8s.core_api.list_namespaced_service(
+            namespace=settings.k8s_namespace,
+            label_selector=f"component=recorder,camera-id={camera_id}",
+        )
+        if services.items:
+            svc = services.items[0]
+            return f"http://{svc.metadata.name}.{settings.k8s_namespace}.svc.cluster.local:8080"
+    except Exception as e:
+        print(f"Failed to find recorder service: {e}")
+    return None
+
+
+@router.get("/{camera_id}/recording/status")
+async def get_recording_status(
+    camera_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get recording status for a camera"""
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    camera = result.scalar_one_or_none()
+    
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    recorder_url = await _get_recorder_url(str(camera_id))
+    if not recorder_url:
+        return {"recording": False, "status": "no_recorder", "message": "Recorder not deployed"}
+    
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(f"{recorder_url}/status")
+            if res.status_code == 200:
+                return res.json()
+            return {"recording": False, "status": "error", "message": f"Recorder returned {res.status_code}"}
+    except Exception as e:
+        return {"recording": False, "status": "error", "message": str(e)}
+
+
+@router.post("/{camera_id}/recording/start")
+async def start_recording(
+    camera_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Start recording for a camera"""
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    camera = result.scalar_one_or_none()
+    
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    if camera.status != CameraStatus.RUNNING.value:
+        raise HTTPException(status_code=400, detail="Camera is not running")
+    
+    recorder_url = await _get_recorder_url(str(camera_id))
+    if not recorder_url:
+        raise HTTPException(status_code=400, detail="Recorder not deployed")
+    
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{recorder_url}/start")
+            if res.status_code == 200:
+                return res.json()
+            raise HTTPException(status_code=res.status_code, detail=res.text)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to contact recorder: {e}")
+
+
+@router.post("/{camera_id}/recording/stop")
+async def stop_recording(
+    camera_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Stop recording for a camera"""
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    camera = result.scalar_one_or_none()
+    
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    recorder_url = await _get_recorder_url(str(camera_id))
+    if not recorder_url:
+        raise HTTPException(status_code=400, detail="Recorder not deployed")
+    
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(f"{recorder_url}/stop")
+            if res.status_code == 200:
+                return res.json()
+            raise HTTPException(status_code=res.status_code, detail=res.text)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to contact recorder: {e}")

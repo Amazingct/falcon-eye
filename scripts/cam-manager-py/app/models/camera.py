@@ -3,7 +3,7 @@ from datetime import datetime
 from uuid import uuid4
 from sqlalchemy import Column, String, Integer, DateTime, JSON, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base, relationship
 import enum
 
 Base = declarative_base()
@@ -46,6 +46,9 @@ class Camera(Base):
     extra_data = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    recordings = relationship("Recording", back_populates="camera", cascade="all, delete-orphan")
     
     def to_dict(self) -> dict:
         """Convert to dictionary"""

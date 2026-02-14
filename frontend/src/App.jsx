@@ -15,7 +15,7 @@ function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [selectedCamera, setSelectedCamera] = useState(null)
   const [showChat, setShowChat] = useState(false)
-  const [chatDocked, setChatDocked] = useState(false)
+  const [chatDocked, setChatDocked] = useState(true)
 
   // Fetch cameras
   const fetchCameras = async () => {

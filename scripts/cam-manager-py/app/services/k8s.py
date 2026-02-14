@@ -104,6 +104,112 @@ def generate_deployment(camera: Camera) -> tuple[dict, str]:
     return deployment, deployment_name
 
 
+def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict, str]:
+    """Generate K8s deployment manifest for a camera recorder"""
+    name_slug = camera.name.lower().replace(" ", "-").replace("_", "-")
+    name_slug = "".join(c for c in name_slug if c.isalnum() or c == "-")
+    deployment_name = f"rec-{name_slug}"
+    
+    deployment = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": deployment_name,
+            "namespace": settings.k8s_namespace,
+            "labels": {
+                "app": "falcon-eye",
+                "component": "recorder",
+                "camera-id": str(camera.id),
+            },
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {
+                "matchLabels": {
+                    "app": "falcon-eye",
+                    "component": "recorder",
+                    "camera-id": str(camera.id),
+                },
+            },
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": "falcon-eye",
+                        "component": "recorder",
+                        "camera-id": str(camera.id),
+                    },
+                },
+                "spec": {
+                    "containers": [{
+                        "name": "recorder",
+                        "image": "ghcr.io/amazingct/falcon-eye-recorder:latest",
+                        "imagePullPolicy": "Always",
+                        "ports": [{"containerPort": 8080, "name": "http"}],
+                        "env": [
+                            {"name": "CAMERA_ID", "value": str(camera.id)},
+                            {"name": "CAMERA_NAME", "value": camera.name},
+                            {"name": "STREAM_URL", "value": stream_url},
+                            {"name": "API_URL", "value": "http://falcon-eye-api:3000"},
+                            {"name": "RECORDINGS_PATH", "value": "/recordings"},
+                        ],
+                        "volumeMounts": [{
+                            "name": "recordings",
+                            "mountPath": "/recordings",
+                        }],
+                        "resources": {
+                            "requests": {"memory": "64Mi", "cpu": "50m"},
+                            "limits": {"memory": "256Mi", "cpu": "500m"},
+                        },
+                    }],
+                    "volumes": [{
+                        "name": "recordings",
+                        "hostPath": {
+                            "path": "/data/falcon-eye/recordings",
+                            "type": "DirectoryOrCreate",
+                        },
+                    }],
+                },
+            },
+        },
+    }
+    
+    return deployment, deployment_name
+
+
+def generate_recorder_service(camera: Camera, deployment_name: str) -> tuple[dict, str]:
+    """Generate K8s service manifest for a recorder"""
+    name_slug = camera.name.lower().replace(" ", "-").replace("_", "-")
+    name_slug = "".join(c for c in name_slug if c.isalnum() or c == "-")
+    service_name = f"svc-rec-{name_slug}"
+    
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": service_name,
+            "namespace": settings.k8s_namespace,
+            "labels": {
+                "app": "falcon-eye",
+                "component": "recorder",
+                "camera-id": str(camera.id),
+            },
+        },
+        "spec": {
+            "type": "ClusterIP",  # Internal only, API talks to it
+            "selector": {
+                "app": "falcon-eye",
+                "component": "recorder",
+                "camera-id": str(camera.id),
+            },
+            "ports": [
+                {"port": 8080, "targetPort": 8080, "name": "http"},
+            ],
+        },
+    }
+    
+    return service, service_name
+
+
 def generate_service(camera: Camera, deployment_name: str) -> tuple[dict, str]:
     """Generate K8s service manifest for a camera"""
     name_slug = camera.name.lower().replace(" ", "-").replace("_", "-")
@@ -201,6 +307,101 @@ async def create_camera_deployment(camera: Camera) -> dict:
     except ApiException as e:
         logger.error(f"K8s API error: {e.reason}")
         raise Exception(f"Kubernetes error: {e.reason}")
+
+
+async def create_recorder_deployment(camera: Camera, stream_port: int, node_ip: str = None) -> dict:
+    """Create K8s deployment for camera recorder"""
+    # Build stream URL - recorder needs to connect to the HLS stream
+    if node_ip:
+        stream_url = f"http://{node_ip}:{stream_port}/hls/stream.m3u8"
+    else:
+        # Use service DNS if no node IP
+        name_slug = camera.name.lower().replace(" ", "-").replace("_", "-")
+        name_slug = "".join(c for c in name_slug if c.isalnum() or c == "-")
+        stream_url = f"http://svc-{name_slug}.{settings.k8s_namespace}.svc.cluster.local:8081/hls/stream.m3u8"
+    
+    deployment, deployment_name = generate_recorder_deployment(camera, stream_url)
+    service, service_name = generate_recorder_service(camera, deployment_name)
+    
+    try:
+        # Create or replace deployment
+        try:
+            apps_api.create_namespaced_deployment(
+                namespace=settings.k8s_namespace,
+                body=deployment,
+            )
+            logger.info(f"Created recorder deployment: {deployment_name}")
+        except ApiException as e:
+            if e.status == 409:
+                apps_api.replace_namespaced_deployment(
+                    name=deployment_name,
+                    namespace=settings.k8s_namespace,
+                    body=deployment,
+                )
+                logger.info(f"Replaced recorder deployment: {deployment_name}")
+            else:
+                raise
+        
+        # Create or get service
+        recorder_port = None
+        try:
+            created_service = core_api.create_namespaced_service(
+                namespace=settings.k8s_namespace,
+                body=service,
+            )
+            recorder_port = 8080
+            logger.info(f"Created recorder service: {service_name}")
+        except ApiException as e:
+            if e.status == 409:
+                recorder_port = 8080
+                logger.info(f"Recorder service {service_name} already exists")
+            else:
+                raise
+        
+        return {
+            "recorder_deployment_name": deployment_name,
+            "recorder_service_name": service_name,
+            "recorder_port": recorder_port,
+        }
+        
+    except ApiException as e:
+        logger.error(f"K8s API error creating recorder: {e.reason}")
+        raise Exception(f"Kubernetes error: {e.reason}")
+
+
+async def delete_recorder_deployment(camera_id: str):
+    """Delete recorder deployment and service for a camera"""
+    # Find and delete recorder deployment
+    try:
+        deployments = apps_api.list_namespaced_deployment(
+            namespace=settings.k8s_namespace,
+            label_selector=f"component=recorder,camera-id={camera_id}",
+        )
+        for dep in deployments.items:
+            apps_api.delete_namespaced_deployment(
+                name=dep.metadata.name,
+                namespace=settings.k8s_namespace,
+            )
+            logger.info(f"Deleted recorder deployment: {dep.metadata.name}")
+    except ApiException as e:
+        if e.status != 404:
+            logger.error(f"Error deleting recorder deployment: {e.reason}")
+    
+    # Find and delete recorder service
+    try:
+        services = core_api.list_namespaced_service(
+            namespace=settings.k8s_namespace,
+            label_selector=f"component=recorder,camera-id={camera_id}",
+        )
+        for svc in services.items:
+            core_api.delete_namespaced_service(
+                name=svc.metadata.name,
+                namespace=settings.k8s_namespace,
+            )
+            logger.info(f"Deleted recorder service: {svc.metadata.name}")
+    except ApiException as e:
+        if e.status != 404:
+            logger.error(f"Error deleting recorder service: {e.reason}")
 
 
 async def delete_camera_deployment(deployment_name: str, service_name: str):

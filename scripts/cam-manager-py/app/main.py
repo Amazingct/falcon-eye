@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import init_db, close_db
-from app.routes import cameras, nodes
+from app.routes import cameras, nodes, recordings
 from app.routes import settings as settings_routes
 from app.chatbot import router as chatbot_router
 from app.models.schemas import HealthResponse
@@ -77,6 +77,7 @@ async def health_check():
 # Include routers
 app.include_router(cameras.router)
 app.include_router(nodes.router)
+app.include_router(recordings.router)
 app.include_router(settings_routes.router)
 app.include_router(chatbot_router)
 

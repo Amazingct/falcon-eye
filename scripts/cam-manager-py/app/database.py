@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 
 from app.config import get_settings
 from app.models.camera import Base
+from app.models.recording import Recording  # Import to register model
 
 settings = get_settings()
 
