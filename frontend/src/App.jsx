@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose } from 'lucide-react'
+import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square } from 'lucide-react'
 
 const API_URL = window.API_URL || '/api'
 
@@ -290,9 +290,46 @@ function App() {
 
 // Camera Grid Component
 function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }) {
+  const [recordingStatus, setRecordingStatus] = useState({}) // camera_id -> { recording: bool }
+  
   const isDeleting = (camera) => camera.status === 'deleting'
   const isCreating = (camera) => camera.status === 'creating' || camera.status === 'pending'
   const isBusy = (camera) => isDeleting(camera) || isCreating(camera)
+  
+  // Fetch recording status for running cameras
+  useEffect(() => {
+    const fetchRecordingStatus = async () => {
+      const runningCameras = cameras.filter(c => c.status === 'running')
+      for (const cam of runningCameras) {
+        try {
+          const res = await fetch(`${API_URL}/cameras/${cam.id}/recording/status`)
+          if (res.ok) {
+            const data = await res.json()
+            setRecordingStatus(prev => ({ ...prev, [cam.id]: data }))
+          }
+        } catch (e) {
+          // Ignore errors
+        }
+      }
+    }
+    fetchRecordingStatus()
+    const interval = setInterval(fetchRecordingStatus, 10000) // Check every 10s
+    return () => clearInterval(interval)
+  }, [cameras])
+  
+  const toggleRecording = async (camera) => {
+    const isRecording = recordingStatus[camera.id]?.status === 'recording'
+    const action = isRecording ? 'stop' : 'start'
+    try {
+      const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/${action}`, { method: 'POST' })
+      if (res.ok) {
+        const data = await res.json()
+        setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
+      }
+    } catch (e) {
+      console.error('Failed to toggle recording:', e)
+    }
+  }
   
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -410,6 +447,22 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }
                 >
                   <Edit className="h-4 w-4" />
                 </button>
+                {/* Recording button - only for running cameras */}
+                {camera.status === 'running' && (
+                  <button
+                    onClick={() => toggleRecording(camera)}
+                    className={`p-2 rounded transition ${
+                      recordingStatus[camera.id]?.status === 'recording'
+                        ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
+                    }`}
+                    title={recordingStatus[camera.id]?.status === 'recording' ? 'Stop Recording' : 'Start Recording'}
+                  >
+                    {recordingStatus[camera.id]?.status === 'recording' 
+                      ? <Square className="h-4 w-4" /> 
+                      : <Circle className="h-4 w-4" />}
+                  </button>
+                )}
               </div>
               <button
                 onClick={() => onDelete(camera.id)}
