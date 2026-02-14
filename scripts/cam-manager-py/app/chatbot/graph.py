@@ -107,7 +107,7 @@ async def stream_chat(
     messages: list[dict],
     tools: list = None,
 ) -> AsyncGenerator[str, None]:
-    """Stream chat responses from Claude with tool support"""
+    """Stream chat responses from Claude with tool support - token by token"""
     llm = get_llm(streaming=True)
     
     # Load tools from config if not provided
@@ -128,18 +128,63 @@ async def stream_chat(
     if tools:
         llm = llm.bind_tools(tools)
     
-    # First call - may return tool calls
-    response = await llm.ainvoke(lc_messages)
+    # Stream the response - collect chunks to check for tool calls
+    collected_chunks = []
+    tool_calls = []
     
-    # Check for tool calls
-    if hasattr(response, "tool_calls") and response.tool_calls:
-        # Execute tools and get results
-        tool_results = []
-        tools_by_name = {t.name: t for t in tools}
+    async for chunk in llm.astream(lc_messages):
+        collected_chunks.append(chunk)
         
-        for tool_call in response.tool_calls:
-            tool_name = tool_call["name"]
-            tool_args = tool_call["args"]
+        # Stream text content immediately (token by token)
+        if hasattr(chunk, "content") and chunk.content:
+            yield chunk.content
+        
+        # Collect tool calls (they come in the stream too)
+        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+            for tc in chunk.tool_call_chunks:
+                # Build up tool calls from chunks
+                if tc.get("index") is not None:
+                    idx = tc["index"]
+                    while len(tool_calls) <= idx:
+                        tool_calls.append({"name": "", "args": "", "id": ""})
+                    if tc.get("name"):
+                        tool_calls[idx]["name"] = tc["name"]
+                    if tc.get("args"):
+                        tool_calls[idx]["args"] += tc["args"]
+                    if tc.get("id"):
+                        tool_calls[idx]["id"] = tc["id"]
+    
+    # If there were tool calls, execute them and stream the follow-up
+    if tool_calls and any(tc["name"] for tc in tool_calls):
+        tool_results = []
+        tools_by_name = {t.name: t for t in tools} if tools else {}
+        
+        # Build the AI message with tool calls for history
+        ai_message_content = "".join(
+            c.content for c in collected_chunks 
+            if hasattr(c, "content") and c.content
+        )
+        ai_tool_calls = [
+            {"name": tc["name"], "args": tc["args"], "id": tc["id"]}
+            for tc in tool_calls if tc["name"]
+        ]
+        
+        # Parse args from string to dict
+        import json as json_module
+        for tc in ai_tool_calls:
+            if isinstance(tc["args"], str):
+                try:
+                    tc["args"] = json_module.loads(tc["args"]) if tc["args"] else {}
+                except:
+                    tc["args"] = {}
+        
+        # Create AI message with tool calls
+        ai_msg = AIMessage(content=ai_message_content, tool_calls=ai_tool_calls)
+        
+        # Execute each tool
+        for tc in ai_tool_calls:
+            tool_name = tc["name"]
+            tool_args = tc["args"]
             
             if tool_name in tools_by_name:
                 tool = tools_by_name[tool_name]
@@ -147,23 +192,24 @@ async def stream_chat(
                     result = tool.invoke(tool_args)
                     tool_results.append(ToolMessage(
                         content=str(result),
-                        tool_call_id=tool_call["id"],
+                        tool_call_id=tc["id"],
                     ))
                 except Exception as e:
                     tool_results.append(ToolMessage(
                         content=f"Error: {str(e)}",
-                        tool_call_id=tool_call["id"],
+                        tool_call_id=tc["id"],
                     ))
+            else:
+                tool_results.append(ToolMessage(
+                    content=f"Unknown tool: {tool_name}",
+                    tool_call_id=tc["id"],
+                ))
         
-        # Add tool call and results to messages
-        lc_messages.append(response)
+        # Add tool interaction to messages
+        lc_messages.append(ai_msg)
         lc_messages.extend(tool_results)
         
-        # Get final response with tool results (streaming)
+        # Stream the final response with tool results
         async for chunk in llm.astream(lc_messages):
             if hasattr(chunk, "content") and chunk.content:
                 yield chunk.content
-    else:
-        # No tool calls - stream the response
-        if hasattr(response, "content") and response.content:
-            yield response.content
