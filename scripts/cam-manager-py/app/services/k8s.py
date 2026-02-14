@@ -411,6 +411,57 @@ async def delete_recorder_deployment(camera_id: str):
             logger.error(f"Error deleting recorder service: {e.reason}")
 
 
+async def cleanup_stale_recorder_resources(valid_camera_ids: list[str]):
+    """Clean up recorder resources for cameras that no longer exist in DB"""
+    cleaned = 0
+    
+    # Find all recorder deployments
+    try:
+        deployments = apps_api.list_namespaced_deployment(
+            namespace=settings.k8s_namespace,
+            label_selector="component=recorder",
+        )
+        for dep in deployments.items:
+            labels = dep.metadata.labels or {}
+            recorder_for = labels.get("recorder-for")
+            if recorder_for and recorder_for not in valid_camera_ids:
+                try:
+                    apps_api.delete_namespaced_deployment(
+                        name=dep.metadata.name,
+                        namespace=settings.k8s_namespace,
+                    )
+                    logger.info(f"Cleaned up stale recorder deployment: {dep.metadata.name} (camera {recorder_for} not in DB)")
+                    cleaned += 1
+                except ApiException:
+                    pass
+    except ApiException as e:
+        logger.error(f"Error listing recorder deployments: {e.reason}")
+    
+    # Find all recorder services
+    try:
+        services = core_api.list_namespaced_service(
+            namespace=settings.k8s_namespace,
+            label_selector="component=recorder",
+        )
+        for svc in services.items:
+            labels = svc.metadata.labels or {}
+            recorder_for = labels.get("recorder-for")
+            if recorder_for and recorder_for not in valid_camera_ids:
+                try:
+                    core_api.delete_namespaced_service(
+                        name=svc.metadata.name,
+                        namespace=settings.k8s_namespace,
+                    )
+                    logger.info(f"Cleaned up stale recorder service: {svc.metadata.name} (camera {recorder_for} not in DB)")
+                    cleaned += 1
+                except ApiException:
+                    pass
+    except ApiException as e:
+        logger.error(f"Error listing recorder services: {e.reason}")
+    
+    return cleaned
+
+
 async def delete_camera_deployment(deployment_name: str, service_name: str):
     """Delete K8s deployment and service"""
     try:

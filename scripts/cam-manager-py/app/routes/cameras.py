@@ -682,6 +682,11 @@ async def start_recording(
             detail=f"Camera already has an active recording: {existing_recording.id}"
         )
     
+    # Clean up stale recorder resources (for cameras no longer in DB)
+    all_cameras = await db.execute(select(Camera.id))
+    valid_camera_ids = [str(c) for c in all_cameras.scalars().all()]
+    await k8s.cleanup_stale_recorder_resources(valid_camera_ids)
+    
     recorder_url, is_ready = await _get_recorder_url(str(camera_id))
     
     # Auto-deploy recorder if not present
