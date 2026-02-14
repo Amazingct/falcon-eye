@@ -63,7 +63,7 @@ class Camera(Base):
             "status": self.status,
             "resolution": self.resolution,
             "framerate": self.framerate,
-            "extra_data": self.extra_data,
+            "metadata": self.extra_data or {},
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
