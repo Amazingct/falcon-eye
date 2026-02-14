@@ -258,7 +258,8 @@ async def create_camera(
             camera.service_name = k8s_result["service_name"]
             camera.stream_port = k8s_result["stream_port"]
             camera.control_port = k8s_result["control_port"]
-            camera.status = CameraStatus.RUNNING.value
+            # Keep status as CREATING - background checker will set RUNNING when pod ready
+            camera.status = CameraStatus.CREATING.value
             
             # Also create recorder deployment
             if camera.stream_port:
@@ -496,7 +497,7 @@ async def start_camera(
         camera.service_name = k8s_result["service_name"]
         camera.stream_port = k8s_result["stream_port"]
         camera.control_port = k8s_result["control_port"]
-        camera.status = CameraStatus.RUNNING.value
+        # Keep status as CREATING - background checker will set RUNNING when pod ready
         
         await db.commit()
         
@@ -508,7 +509,7 @@ async def start_camera(
             except Exception as e:
                 print(f"Failed to create recorder: {e}")
         
-        return MessageResponse(message="Camera started", id=camera_id)
+        return MessageResponse(message="Camera starting", id=camera_id)
         
     except Exception as e:
         camera.status = CameraStatus.ERROR.value
