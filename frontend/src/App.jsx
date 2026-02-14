@@ -55,6 +55,14 @@ function App() {
     return () => clearInterval(interval)
   }, [])
 
+  // Auto-dismiss errors after 8 seconds
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 8000)
+      return () => clearTimeout(timer)
+    }
+  }, [error])
+
   // Delete camera
   const deleteCamera = async (id) => {
     if (!confirm('Are you sure you want to delete this camera?')) return
@@ -197,9 +205,12 @@ function App() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         {error && (
-          <div className="bg-red-500/10 border border-red-500 text-red-500 px-4 py-3 rounded-lg mb-6">
-            {error}
-            <button onClick={() => setError(null)} className="float-right">×</button>
+          <div className="bg-red-500/20 border border-red-500 text-red-400 px-4 py-3 rounded-lg mb-6 flex items-center justify-between animate-pulse">
+            <div className="flex items-center space-x-2">
+              <AlertCircle className="h-5 w-5 flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button onClick={() => setError(null)} className="text-red-300 hover:text-white ml-4">×</button>
           </div>
         )}
 
@@ -229,6 +240,7 @@ function App() {
               onSelect={setSelectedCamera}
               onEdit={setShowEditModal}
               onRestart={restartCamera}
+              onError={setError}
             />
           ) : (
             <CameraList
@@ -237,6 +249,7 @@ function App() {
               onToggle={toggleCamera}
               onEdit={setShowEditModal}
               onRestart={restartCamera}
+              onError={setError}
             />
           )
         ) : (
@@ -312,7 +325,7 @@ function App() {
 }
 
 // Camera Grid Component
-function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }) {
+function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, onError }) {
   const [recordingStatus, setRecordingStatus] = useState({}) // camera_id -> { recording: bool }
   
   const isDeleting = (camera) => camera.status === 'deleting'
@@ -345,12 +358,16 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }
     const action = isRecording ? 'stop' : 'start'
     try {
       const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/${action}`, { method: 'POST' })
+      const data = await res.json()
       if (res.ok) {
-        const data = await res.json()
         setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
+      } else {
+        // Show error to user
+        const errorMsg = data.detail || data.message || `Failed to ${action} recording`
+        onError(errorMsg)
       }
     } catch (e) {
-      console.error('Failed to toggle recording:', e)
+      onError(`Failed to ${action} recording: ${e.message}`)
     }
   }
   
@@ -504,7 +521,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }
 }
 
 // Camera List Component
-function CameraList({ cameras, onDelete, onToggle, onEdit, onRestart }) {
+function CameraList({ cameras, onDelete, onToggle, onEdit, onRestart, onError }) {
   const isDeleting = (camera) => camera.status === 'deleting'
   const isCreating = (camera) => camera.status === 'creating' || camera.status === 'pending'
   const isBusy = (camera) => isDeleting(camera) || isCreating(camera)
