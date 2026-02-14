@@ -43,14 +43,6 @@ class Settings(BaseSettings):
             return url
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        # Map DATABASE_URL env var to database_url_env field
-        fields = {
-            'database_url_env': {'env': 'DATABASE_URL'}
-        }
-    
     # Kubernetes
     k8s_namespace: str = "falcon-eye"
     k8s_config_path: str | None = None
@@ -92,6 +84,10 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        # Map DATABASE_URL env var to database_url_env field
+        fields = {
+            'database_url_env': {'env': 'DATABASE_URL'}
+        }
 
 
 @lru_cache()
