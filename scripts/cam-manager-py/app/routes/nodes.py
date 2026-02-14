@@ -145,10 +145,12 @@ async def _scan_network_cameras(subnet: str) -> tuple[list[NetworkCamera], list[
                         url=f"rtsp://{ip}:{port}/stream1"
                     )
                 elif protocol == "onvif":
+                    # ONVIF cameras stream via RTSP - use common RTSP URL patterns
+                    # Most ONVIF cameras use port 554 for RTSP
                     return NetworkCamera(
-                        ip=ip, port=port, protocol="onvif",
-                        name=f"ONVIF Camera {ip}",
-                        url=f"http://{ip}:{port}/onvif/device_service"
+                        ip=ip, port=554, protocol="rtsp",
+                        name=f"IP Camera {ip}",
+                        url=f"rtsp://{ip}:554/Streaming/Channels/101"  # Common Hikvision/generic pattern
                     )
         except:
             pass
