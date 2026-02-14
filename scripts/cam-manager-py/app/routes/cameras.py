@@ -113,6 +113,24 @@ async def get_camera(
     return enrich_camera_response(camera, k8s_status)
 
 
+def _extract_ip_from_url(url: str) -> str:
+    """Extract IP address from a URL (rtsp://user:pass@192.168.1.1:554/...)"""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if hostname:
+            return hostname
+    except:
+        pass
+    # Fallback: try to find IP pattern in URL
+    import re
+    match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', url)
+    if match:
+        return match.group(1)
+    return url
+
+
 @router.post("/", response_model=CameraResponse, status_code=201)
 async def create_camera(
     camera_data: CameraCreate,
@@ -159,6 +177,11 @@ async def create_camera(
     # User must edit with credentials then start manually
     is_network_camera = camera_data.protocol.value in ["rtsp", "onvif", "http"]
     
+    # For network cameras, set device_path to IP address extracted from source_url
+    device_path = camera_data.device_path
+    if is_network_camera and camera_data.source_url:
+        device_path = _extract_ip_from_url(camera_data.source_url)
+    
     # Create camera record
     camera = Camera(
         id=uuid4(),
@@ -166,8 +189,8 @@ async def create_camera(
         protocol=camera_data.protocol.value,
         location=camera_data.location,
         source_url=camera_data.source_url,
-        device_path=camera_data.device_path,
-        node_name=camera_data.node_name,
+        device_path=device_path,
+        node_name=camera_data.node_name or ("LAN" if is_network_camera else None),
         resolution=camera_data.resolution or settings.default_resolution,
         framerate=camera_data.framerate or settings.default_framerate,
         metadata=camera_data.metadata or {},
@@ -216,6 +239,10 @@ async def update_camera(
     # Check if source_url is changing (requires redeploy)
     update_data = camera_data.model_dump(exclude_unset=True)
     needs_redeploy = 'source_url' in update_data and update_data['source_url'] != camera.source_url
+    
+    # If source_url changes for network camera, also update device_path with new IP
+    if 'source_url' in update_data and camera.protocol in ["rtsp", "onvif", "http"]:
+        update_data['device_path'] = _extract_ip_from_url(update_data['source_url'])
     
     # Update fields
     for field, value in update_data.items():
