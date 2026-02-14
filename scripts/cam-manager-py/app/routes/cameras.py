@@ -63,12 +63,26 @@ async def list_cameras(
     result = await db.execute(query)
     cameras = result.scalars().all()
     
-    # Enrich with K8s status
+    # Enrich with K8s status and sync DB status
     enriched = []
     for cam in cameras:
         k8s_status = None
+        
+        # Skip status check for cameras being deleted
+        if cam.status == CameraStatus.DELETING.value:
+            enriched.append(enrich_camera_response(cam, k8s_status))
+            continue
+            
         if cam.deployment_name:
             try:
+                # Get actual pod status from K8s
+                actual_status = await k8s.get_camera_pod_status(str(cam.id))
+                
+                # Update DB if status changed
+                if actual_status != cam.status:
+                    cam.status = actual_status
+                    await db.commit()
+                
                 k8s_status = await k8s.get_deployment_status(cam.deployment_name)
             except Exception:
                 pass

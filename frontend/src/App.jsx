@@ -46,8 +46,8 @@ function App() {
     }
     init()
 
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchCameras, 10000)
+    // Refresh every 5 seconds (faster when cameras are being created/deleted)
+    const interval = setInterval(fetchCameras, 5000)
     return () => clearInterval(interval)
   }, [])
 
@@ -250,18 +250,20 @@ function App() {
 // Camera Grid Component
 function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
   const isDeleting = (camera) => camera.status === 'deleting'
+  const isCreating = (camera) => camera.status === 'creating' || camera.status === 'pending'
+  const isBusy = (camera) => isDeleting(camera) || isCreating(camera)
   
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       {cameras.map(camera => (
         <div
           key={camera.id}
-          className={`bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition ${isDeleting(camera) ? 'opacity-50' : ''}`}
+          className={`bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition ${isBusy(camera) ? 'opacity-75' : ''}`}
         >
           {/* Stream Preview */}
           <div
             className="aspect-video bg-gray-900 relative cursor-pointer"
-            onClick={() => !isDeleting(camera) && onSelect(camera)}
+            onClick={() => !isBusy(camera) && onSelect(camera)}
           >
             {camera.status === 'running' ? (
               <img
@@ -273,9 +275,12 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
                   e.target.className = 'hidden'
                 }}
               />
-            ) : isDeleting(camera) ? (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Loader2 className="h-12 w-12 text-yellow-500 animate-spin" />
+            ) : isBusy(camera) ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <Loader2 className={`h-12 w-12 animate-spin ${isCreating(camera) ? 'text-blue-500' : 'text-yellow-500'}`} />
+                <p className="text-sm text-gray-400 mt-2">
+                  {isCreating(camera) ? 'Starting camera...' : 'Removing...'}
+                </p>
               </div>
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
@@ -283,14 +288,21 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
               </div>
             )}
             {/* Status Badge */}
-            <div className={`absolute top-2 right-2 px-2 py-1 rounded text-xs font-medium ${
+            <div className={`absolute top-2 right-2 px-2 py-1 rounded text-xs font-medium flex items-center space-x-1 ${
               camera.status === 'running' 
                 ? 'bg-green-500/20 text-green-400'
+                : isCreating(camera)
+                ? 'bg-blue-500/20 text-blue-400'
                 : camera.status === 'deleting'
                 ? 'bg-yellow-500/20 text-yellow-400'
                 : 'bg-red-500/20 text-red-400'
             }`}>
-              {camera.status === 'running' ? 'LIVE' : camera.status === 'deleting' ? 'DELETING...' : 'OFFLINE'}
+              {isBusy(camera) && <Loader2 className="h-3 w-3 animate-spin" />}
+              <span>
+                {camera.status === 'running' ? 'LIVE' : 
+                 isCreating(camera) ? 'ADDING...' :
+                 camera.status === 'deleting' ? 'DELETING...' : 'OFFLINE'}
+              </span>
             </div>
           </div>
           
@@ -309,9 +321,9 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => onToggle(camera)}
-                  disabled={isDeleting(camera)}
+                  disabled={isBusy(camera)}
                   className={`p-2 rounded transition ${
-                    isDeleting(camera) ? 'opacity-50 cursor-not-allowed' :
+                    isBusy(camera) ? 'opacity-50 cursor-not-allowed bg-gray-700' :
                     camera.status === 'running'
                       ? 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
                       : 'bg-green-500/20 hover:bg-green-500/30 text-green-400'
@@ -321,16 +333,16 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
                 </button>
                 <button
                   onClick={() => onEdit(camera)}
-                  disabled={isDeleting(camera)}
-                  className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-blue-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={isBusy(camera)}
+                  className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-blue-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <Edit className="h-4 w-4" />
                 </button>
               </div>
               <button
                 onClick={() => onDelete(camera.id)}
-                disabled={isDeleting(camera)}
-                className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-red-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={isBusy(camera)}
+                className={`p-2 rounded bg-gray-700 hover:bg-gray-600 transition text-red-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -345,6 +357,8 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit }) {
 // Camera List Component
 function CameraList({ cameras, onDelete, onToggle, onEdit }) {
   const isDeleting = (camera) => camera.status === 'deleting'
+  const isCreating = (camera) => camera.status === 'creating' || camera.status === 'pending'
+  const isBusy = (camera) => isDeleting(camera) || isCreating(camera)
   
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
@@ -360,7 +374,7 @@ function CameraList({ cameras, onDelete, onToggle, onEdit }) {
         </thead>
         <tbody className="divide-y divide-gray-700">
           {cameras.map(camera => (
-            <tr key={camera.id} className={`hover:bg-gray-700/30 ${isDeleting(camera) ? 'opacity-50' : ''}`}>
+            <tr key={camera.id} className={`hover:bg-gray-700/30 ${isBusy(camera) ? 'opacity-60' : ''}`}>
               <td className="px-4 py-3 font-medium">{camera.name}</td>
               <td className="px-4 py-3">
                 <span className="bg-gray-700 px-2 py-1 rounded text-sm uppercase">{camera.protocol}</span>
@@ -369,34 +383,35 @@ function CameraList({ cameras, onDelete, onToggle, onEdit }) {
               <td className="px-4 py-3">
                 <span className={`inline-flex items-center space-x-1 ${
                   camera.status === 'running' ? 'text-green-400' : 
+                  isCreating(camera) ? 'text-blue-400' :
                   camera.status === 'deleting' ? 'text-yellow-400' : 'text-red-400'
                 }`}>
                   {camera.status === 'running' ? <CheckCircle className="h-4 w-4" /> : 
-                   camera.status === 'deleting' ? <Loader2 className="h-4 w-4 animate-spin" /> : 
+                   isBusy(camera) ? <Loader2 className="h-4 w-4 animate-spin" /> : 
                    <AlertCircle className="h-4 w-4" />}
-                  <span>{camera.status}</span>
+                  <span>{isCreating(camera) ? 'adding...' : camera.status}</span>
                 </span>
               </td>
               <td className="px-4 py-3">
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => onToggle(camera)}
-                    disabled={isDeleting(camera)}
-                    className={`p-1.5 rounded hover:bg-gray-600 transition ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={isBusy(camera)}
+                    className={`p-1.5 rounded hover:bg-gray-600 transition ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     {camera.status === 'running' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                   </button>
                   <button
                     onClick={() => onEdit(camera)}
-                    disabled={isDeleting(camera)}
-                    className={`p-1.5 rounded hover:bg-gray-600 transition text-blue-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={isBusy(camera)}
+                    className={`p-1.5 rounded hover:bg-gray-600 transition text-blue-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     <Edit className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => onDelete(camera.id)}
-                    disabled={isDeleting(camera)}
-                    className={`p-1.5 rounded hover:bg-gray-600 transition text-red-400 ${isDeleting(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={isBusy(camera)}
+                    className={`p-1.5 rounded hover:bg-gray-600 transition text-red-400 ${isBusy(camera) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>

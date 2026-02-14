@@ -219,6 +219,47 @@ async def get_deployment_status(deployment_name: str) -> Optional[dict]:
         raise
 
 
+async def get_camera_pod_status(camera_id: str) -> str:
+    """Get actual pod status for a camera, returns: running, creating, error, stopped"""
+    try:
+        pods = core_api.list_namespaced_pod(
+            namespace=settings.k8s_namespace,
+            label_selector=f"camera-id={camera_id}",
+        )
+        
+        if not pods.items:
+            return "stopped"
+        
+        pod = pods.items[0]
+        phase = pod.status.phase
+        
+        # Check container statuses
+        if pod.status.container_statuses:
+            for cs in pod.status.container_statuses:
+                if cs.state.running:
+                    return "running"
+                elif cs.state.waiting:
+                    reason = cs.state.waiting.reason
+                    if reason in ["CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff"]:
+                        return "error"
+                    return "creating"
+                elif cs.state.terminated:
+                    return "error" if cs.state.terminated.exit_code != 0 else "stopped"
+        
+        # Fall back to pod phase
+        if phase == "Running":
+            return "running"
+        elif phase == "Pending":
+            return "creating"
+        elif phase in ["Failed", "Unknown"]:
+            return "error"
+        else:
+            return "stopped"
+            
+    except ApiException:
+        return "error"
+
+
 class K8sService:
     """Kubernetes service wrapper for async operations"""
     
