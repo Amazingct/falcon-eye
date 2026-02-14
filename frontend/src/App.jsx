@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw } from 'lucide-react'
+import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose } from 'lucide-react'
 
 const API_URL = window.API_URL || '/api'
 
@@ -14,6 +14,8 @@ function App() {
   const [showScanModal, setShowScanModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [selectedCamera, setSelectedCamera] = useState(null)
+  const [showChat, setShowChat] = useState(false)
+  const [chatDocked, setChatDocked] = useState(false)
 
   // Fetch cameras
   const fetchCameras = async () => {
@@ -274,6 +276,14 @@ function App() {
           }}
         />
       )}
+
+      {/* Chat Widget */}
+      <ChatWidget 
+        isOpen={showChat}
+        onToggle={() => setShowChat(!showChat)}
+        isDocked={chatDocked}
+        onDockToggle={() => setChatDocked(!chatDocked)}
+      />
     </div>
   )
 }
@@ -1304,6 +1314,212 @@ function SettingsModal({ onClose, onClearAll }) {
             </>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Chat Widget Component
+function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [chatStatus, setChatStatus] = useState(null)
+  const messagesEndRef = React.useRef(null)
+
+  // Check chat health on mount
+  useEffect(() => {
+    const checkHealth = async () => {
+      try {
+        const res = await fetch(`${API_URL}/chat/health`)
+        if (res.ok) {
+          const data = await res.json()
+          setChatStatus(data)
+        }
+      } catch (err) {
+        setChatStatus({ status: 'error', configured: false })
+      }
+    }
+    checkHealth()
+  }, [])
+
+  // Scroll to bottom when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const sendMessage = async () => {
+    if (!input.trim() || isLoading) return
+
+    const userMessage = { role: 'user', content: input.trim() }
+    const newMessages = [...messages, userMessage]
+    setMessages(newMessages)
+    setInput('')
+    setIsLoading(true)
+
+    try {
+      const res = await fetch(`${API_URL}/chat/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: newMessages, stream: true }),
+      })
+
+      if (!res.ok) throw new Error('Chat request failed')
+
+      // Handle SSE stream
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let assistantContent = ''
+      
+      // Add placeholder for assistant message
+      setMessages([...newMessages, { role: 'assistant', content: '' }])
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value)
+        const lines = chunk.split('\n')
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (data.content) {
+                assistantContent += data.content
+                setMessages(prev => {
+                  const updated = [...prev]
+                  updated[updated.length - 1] = { role: 'assistant', content: assistantContent }
+                  return updated
+                })
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      sendMessage()
+    }
+  }
+
+  // Floating button when closed
+  if (!isOpen) {
+    return (
+      <button
+        onClick={onToggle}
+        className="fixed bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-700 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 z-50"
+        title="Open Chat"
+      >
+        <MessageCircle className="h-6 w-6 text-white" />
+      </button>
+    )
+  }
+
+  // Chat panel classes based on dock state
+  const panelClasses = isDocked
+    ? "fixed top-0 right-0 h-full w-96 bg-gray-800 border-l border-gray-700 shadow-xl z-40 flex flex-col"
+    : "fixed bottom-6 right-6 w-96 h-[500px] bg-gray-800 rounded-lg border border-gray-700 shadow-xl z-50 flex flex-col"
+
+  return (
+    <div className={panelClasses}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-gray-800/90">
+        <div className="flex items-center space-x-2">
+          <MessageCircle className="h-5 w-5 text-blue-500" />
+          <span className="font-semibold">Falcon-Eye Assistant</span>
+          {chatStatus && !chatStatus.configured && (
+            <span className="text-xs text-yellow-500">(Not configured)</span>
+          )}
+        </div>
+        <div className="flex items-center space-x-1">
+          <button
+            onClick={onDockToggle}
+            className="p-1.5 hover:bg-gray-700 rounded transition"
+            title={isDocked ? "Undock" : "Dock to side"}
+          >
+            {isDocked ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+          </button>
+          <button
+            onClick={onToggle}
+            className="p-1.5 hover:bg-gray-700 rounded transition"
+            title="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.length === 0 && (
+          <div className="text-center text-gray-500 py-8">
+            <MessageCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
+            <p>Hi! I'm your Falcon-Eye Assistant.</p>
+            <p className="text-sm mt-2">Ask me anything about your cameras!</p>
+          </div>
+        )}
+        {messages.map((msg, i) => (
+          <div
+            key={i}
+            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            <div
+              className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                msg.role === 'user'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-100'
+              }`}
+            >
+              <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+            </div>
+          </div>
+        ))}
+        {isLoading && messages[messages.length - 1]?.role === 'user' && (
+          <div className="flex justify-start">
+            <div className="bg-gray-700 rounded-lg px-4 py-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <div className="p-4 border-t border-gray-700">
+        <div className="flex items-center space-x-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Type a message..."
+            disabled={isLoading || !chatStatus?.configured}
+            className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"
+          />
+          <button
+            onClick={sendMessage}
+            disabled={!input.trim() || isLoading || !chatStatus?.configured}
+            className="p-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition"
+          >
+            <Send className="h-5 w-5" />
+          </button>
+        </div>
+        {chatStatus && !chatStatus.configured && (
+          <p className="text-xs text-yellow-500 mt-2">
+            Set ANTHROPIC_API_KEY to enable chat
+          </p>
+        )}
       </div>
     </div>
   )

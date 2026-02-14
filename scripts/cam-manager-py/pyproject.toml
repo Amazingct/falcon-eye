@@ -20,6 +20,11 @@ kubernetes = "^29.0.0"
 alembic = "^1.13.1"
 httpx = "^0.26.0"
 paramiko = "^3.4.0"
+# LangChain / LangGraph for chatbot
+langchain = "^0.1.0"
+langchain-anthropic = "^0.1.0"
+langgraph = "^0.0.20"
+sse-starlette = "^1.6.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
