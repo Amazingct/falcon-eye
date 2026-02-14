@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cleanup-config
+  namespace: falcon-eye
+data:
+  CLEANUP_INTERVAL: "*/10 * * * *"  # Every 10 minutes (cron format)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: falcon-eye-cleanup
+  namespace: falcon-eye
+  labels:
+    app: falcon-eye
+    component: cleanup
+spec:
+  schedule: "*/10 * * * *"  # Every 10 minutes - override via ConfigMap + restart
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: falcon-eye
+            component: cleanup
+        spec:
+          restartPolicy: Never
+          serviceAccountName: falcon-eye-api
+          containers:
+          - name: cleanup
+            image: ghcr.io/amazingct/falcon-eye-api:latest
+            imagePullPolicy: Always
+            command: ["python", "-m", "app.tasks.cleanup"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: falcon-eye-db-secret
+                  key: DATABASE_URL
+            - name: K8S_NAMESPACE
+              value: "falcon-eye"
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "128Mi"
+                cpu: "200m"

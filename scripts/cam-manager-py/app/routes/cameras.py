@@ -1,5 +1,6 @@
 """Camera API routes"""
 import asyncio
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
@@ -21,6 +22,9 @@ settings = get_settings()
 
 # Track cameras being deleted (device_path -> delete_time)
 _deleting_cameras: dict[str, float] = {}
+
+# Timeout for stuck "creating" cameras (3 minutes)
+CREATING_TIMEOUT_MINUTES = 3
 
 
 def enrich_camera_response(camera: Camera, k8s_status: Optional[dict] = None) -> dict:
@@ -65,6 +69,8 @@ async def list_cameras(
     
     # Enrich with K8s status and sync DB status
     enriched = []
+    now = datetime.now(timezone.utc)
+    
     for cam in cameras:
         k8s_status = None
         
@@ -72,6 +78,29 @@ async def list_cameras(
         if cam.status == CameraStatus.DELETING.value:
             enriched.append(enrich_camera_response(cam, k8s_status))
             continue
+        
+        # Check for stuck "creating" cameras (timeout after 3 minutes)
+        if cam.status == CameraStatus.CREATING.value:
+            created_at = cam.updated_at or cam.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if now - created_at > timedelta(minutes=CREATING_TIMEOUT_MINUTES):
+                # Auto-stop stuck camera
+                try:
+                    if cam.deployment_name or cam.service_name:
+                        await k8s.delete_camera_deployment(
+                            cam.deployment_name or "",
+                            cam.service_name or "",
+                        )
+                    cam.status = CameraStatus.ERROR.value
+                    cam.metadata = {**cam.metadata, "error": "Timed out while creating (3 min)"}
+                    cam.deployment_name = None
+                    cam.service_name = None
+                    await db.commit()
+                except Exception:
+                    pass
+                enriched.append(enrich_camera_response(cam, k8s_status))
+                continue
             
         if cam.deployment_name:
             try:
@@ -149,6 +178,25 @@ async def create_camera(
             status_code=400,
             detail="source_url is required for this protocol"
         )
+    
+    # For network cameras, extract IP early for duplicate check
+    check_device_path = camera_data.device_path
+    if camera_data.protocol.value in ["rtsp", "onvif", "http"] and camera_data.source_url:
+        check_device_path = _extract_ip_from_url(camera_data.source_url)
+    
+    # Check for duplicate IP/device_path (prevent adding same camera twice)
+    if check_device_path:
+        existing_camera = await db.execute(
+            select(Camera).where(
+                Camera.device_path == check_device_path,
+                Camera.status != CameraStatus.DELETING.value
+            )
+        )
+        if existing_camera.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail=f"A camera with this {'IP address' if camera_data.protocol.value != 'usb' else 'device path'} already exists"
+            )
     
     # Check if USB camera is being deleted
     if camera_data.protocol == "usb" and camera_data.device_path:

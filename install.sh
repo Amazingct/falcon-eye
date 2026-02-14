@@ -29,7 +29,7 @@ echo -e "${NC}"
 
 # Check prerequisites
 check_prerequisites() {
-    echo -e "${YELLOW}[1/7] Checking prerequisites...${NC}"
+    echo -e "${YELLOW}[1/8] Checking prerequisites...${NC}"
     
     if ! command -v kubectl &> /dev/null; then
         echo -e "${RED}✗ kubectl not found. Please install kubectl first.${NC}"
@@ -55,7 +55,7 @@ check_prerequisites() {
 
 # Check for existing installation
 check_existing() {
-    echo -e "${YELLOW}[2/7] Checking for existing installation...${NC}"
+    echo -e "${YELLOW}[2/8] Checking for existing installation...${NC}"
     
     if kubectl get namespace ${NAMESPACE} &> /dev/null; then
         if kubectl get deployment falcon-eye-api -n ${NAMESPACE} &> /dev/null; then
@@ -77,7 +77,7 @@ check_existing() {
 
 # Detect cluster nodes
 detect_nodes() {
-    echo -e "${YELLOW}[3/7] Detecting cluster nodes...${NC}"
+    echo -e "${YELLOW}[3/8] Detecting cluster nodes...${NC}"
     
     NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
     echo -e "${GREEN}✓ Found ${NODE_COUNT} node(s)${NC}"
@@ -94,7 +94,7 @@ detect_nodes() {
 
 # Create namespace
 create_namespace() {
-    echo -e "${YELLOW}[4/7] Setting up namespace '${NAMESPACE}'...${NC}"
+    echo -e "${YELLOW}[4/8] Setting up namespace '${NAMESPACE}'...${NC}"
     
     if kubectl get namespace ${NAMESPACE} &> /dev/null; then
         echo -e "${GREEN}✓ Namespace '${NAMESPACE}' exists${NC}"
@@ -106,7 +106,7 @@ create_namespace() {
 
 # Deploy PostgreSQL
 deploy_database() {
-    echo -e "${YELLOW}[5/7] Deploying PostgreSQL database...${NC}"
+    echo -e "${YELLOW}[5/8] Deploying PostgreSQL database...${NC}"
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
@@ -184,7 +184,7 @@ EOF
 
 # Deploy Falcon-Eye backend
 deploy_backend() {
-    echo -e "${YELLOW}[6/7] Deploying Falcon-Eye API...${NC}"
+    echo -e "${YELLOW}[6/8] Deploying Falcon-Eye API...${NC}"
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
@@ -261,6 +261,9 @@ rules:
 - apiGroups: ["apps"]
   resources: ["deployments"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["cronjobs", "jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
@@ -290,7 +293,7 @@ EOF
 
 # Deploy frontend
 deploy_frontend() {
-    echo -e "${YELLOW}[7/7] Deploying Falcon-Eye Dashboard...${NC}"
+    echo -e "${YELLOW}[7/8] Deploying Falcon-Eye Dashboard...${NC}"
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
@@ -343,6 +346,59 @@ EOF
         echo "  Restarting Dashboard to pull latest image..."
         kubectl rollout restart deployment/falcon-eye-dashboard -n ${NAMESPACE} 2>/dev/null || true
     fi
+}
+
+# Deploy cleanup CronJob
+deploy_cleanup_cronjob() {
+    echo -e "${YELLOW}[8/8] Deploying cleanup CronJob...${NC}"
+    
+    # Get cleanup interval from ConfigMap or use default
+    CLEANUP_INTERVAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLEANUP_INTERVAL}' 2>/dev/null || echo "*/10 * * * *")
+    
+    cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: falcon-eye-cleanup
+  labels:
+    app: falcon-eye
+    component: cleanup
+spec:
+  schedule: "${CLEANUP_INTERVAL}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: falcon-eye
+            component: cleanup
+        spec:
+          restartPolicy: Never
+          serviceAccountName: falcon-eye-sa
+          containers:
+          - name: cleanup
+            image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
+            imagePullPolicy: Always
+            command: ["python", "-m", "app.tasks.cleanup"]
+            envFrom:
+            - configMapRef:
+                name: falcon-eye-config
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "128Mi"
+                cpu: "200m"
+EOF
+    
+    echo -e "${GREEN}✓ Cleanup CronJob configured (runs: ${CLEANUP_INTERVAL})${NC}"
 }
 
 # Wait for rollout
@@ -499,6 +555,7 @@ main() {
     deploy_database
     deploy_backend
     deploy_frontend
+    deploy_cleanup_cronjob
     wait_for_rollout
     print_access_info
 }

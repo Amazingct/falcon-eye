@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2 } from 'lucide-react'
+import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw } from 'lucide-react'
 
 const API_URL = window.API_URL || '/api'
 
@@ -12,6 +12,7 @@ function App() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(null) // camera to edit
   const [showScanModal, setShowScanModal] = useState(false)
+  const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [selectedCamera, setSelectedCamera] = useState(null)
 
   // Fetch cameras
@@ -129,6 +130,13 @@ function App() {
               >
                 <Plus className="h-5 w-5" />
                 <span>Add Camera</span>
+              </button>
+              <button
+                onClick={() => setShowSettingsModal(true)}
+                className="p-2 hover:bg-gray-700 rounded-lg transition"
+                title="Settings"
+              >
+                <Settings className="h-5 w-5" />
               </button>
             </div>
           </div>
@@ -251,6 +259,17 @@ function App() {
           onClose={() => setShowScanModal(false)}
           onAdded={(count) => {
             setShowScanModal(false)
+            fetchCameras()
+          }}
+        />
+      )}
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <SettingsModal
+          onClose={() => setShowSettingsModal(false)}
+          onClearAll={() => {
+            setShowSettingsModal(false)
             fetchCameras()
           }}
         />
@@ -1037,6 +1056,232 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
               </>
             )}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Settings Modal
+function SettingsModal({ onClose, onClearAll }) {
+  const [settings, setSettings] = useState(null)
+  const [form, setForm] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [restarting, setRestarting] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [message, setMessage] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const res = await fetch(`${API_URL}/settings/`)
+        if (!res.ok) throw new Error('Failed to fetch settings')
+        const data = await res.json()
+        setSettings(data)
+        setForm({
+          default_resolution: data.default_resolution,
+          default_framerate: data.default_framerate,
+          cleanup_interval: data.cleanup_interval,
+          creating_timeout_minutes: data.creating_timeout_minutes,
+        })
+      } catch (err) {
+        setError(err.message)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchSettings()
+  }, [])
+
+  const saveSettings = async () => {
+    setSaving(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await fetch(`${API_URL}/settings/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      if (!res.ok) throw new Error('Failed to save settings')
+      setMessage('Settings saved! Restart deployments to apply.')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const restartAll = async () => {
+    if (!confirm('Restart all Falcon-Eye deployments? This will briefly interrupt camera streams.')) return
+    setRestarting(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await fetch(`${API_URL}/settings/restart-all`, { method: 'POST' })
+      if (!res.ok) throw new Error('Failed to restart')
+      const data = await res.json()
+      setMessage(`${data.message}: ${data.restarted.join(', ')}`)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setRestarting(false)
+    }
+  }
+
+  const clearAllCameras = async () => {
+    if (!confirm('DELETE ALL CAMERAS? This will remove all cameras from the database and Kubernetes. This cannot be undone!')) return
+    if (!confirm('Are you REALLY sure? Type "yes" mentally and click OK.')) return
+    setClearing(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API_URL}/settings/cameras/all`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to clear cameras')
+      const data = await res.json()
+      setMessage(data.message)
+      setTimeout(() => onClearAll(), 1500)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setClearing(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-gray-800 rounded-lg w-full max-w-lg mx-4 border border-gray-700">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
+          <h2 className="text-lg font-semibold flex items-center space-x-2">
+            <Settings className="h-5 w-5" />
+            <span>Settings</span>
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">×</button>
+        </div>
+        
+        <div className="p-6 space-y-6">
+          {loading ? (
+            <div className="text-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-500" />
+            </div>
+          ) : (
+            <>
+              {error && (
+                <div className="bg-red-500/10 border border-red-500 text-red-500 px-3 py-2 rounded text-sm">
+                  {error}
+                </div>
+              )}
+              {message && (
+                <div className="bg-green-500/10 border border-green-500 text-green-500 px-3 py-2 rounded text-sm">
+                  {message}
+                </div>
+              )}
+
+              {/* Camera Defaults */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">Camera Defaults</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Resolution</label>
+                    <select
+                      value={form.default_resolution}
+                      onChange={e => setForm({ ...form, default_resolution: e.target.value })}
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm"
+                    >
+                      <option value="320x240">320x240</option>
+                      <option value="640x480">640x480</option>
+                      <option value="800x600">800x600</option>
+                      <option value="1280x720">1280x720 (HD)</option>
+                      <option value="1920x1080">1920x1080 (FHD)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Framerate</label>
+                    <input
+                      type="number"
+                      value={form.default_framerate}
+                      onChange={e => setForm({ ...form, default_framerate: parseInt(e.target.value) })}
+                      min="1"
+                      max="60"
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* System Settings */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">System Settings</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Cleanup Interval (cron)</label>
+                    <input
+                      type="text"
+                      value={form.cleanup_interval}
+                      onChange={e => setForm({ ...form, cleanup_interval: e.target.value })}
+                      placeholder="*/10 * * * *"
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Cron expression for orphan pod cleanup (default: every 10 min)</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Creating Timeout (minutes)</label>
+                    <input
+                      type="number"
+                      value={form.creating_timeout_minutes}
+                      onChange={e => setForm({ ...form, creating_timeout_minutes: parseInt(e.target.value) })}
+                      min="1"
+                      max="30"
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Auto-stop cameras stuck in "creating" state</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Info */}
+              {settings && (
+                <div className="bg-gray-700/30 rounded p-3 text-sm">
+                  <p className="text-gray-400"><strong>Namespace:</strong> {settings.k8s_namespace}</p>
+                  <p className="text-gray-400"><strong>Node IPs:</strong> {Object.keys(settings.node_ips || {}).length} configured</p>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex space-x-3">
+                <button
+                  onClick={saveSettings}
+                  disabled={saving}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
+                >
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  <span>{saving ? 'Saving...' : 'Save'}</span>
+                </button>
+                <button
+                  onClick={restartAll}
+                  disabled={restarting}
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-600/50 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
+                >
+                  {restarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                  <span>{restarting ? 'Restarting...' : 'Restart All'}</span>
+                </button>
+              </div>
+
+              {/* Danger Zone */}
+              <div className="border-t border-gray-700 pt-4">
+                <h3 className="text-sm font-medium text-red-400 mb-3">Danger Zone</h3>
+                <button
+                  onClick={clearAllCameras}
+                  disabled={clearing}
+                  className="w-full bg-red-600/20 hover:bg-red-600/30 border border-red-600 text-red-400 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
+                >
+                  {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  <span>{clearing ? 'Clearing...' : 'Clear All Cameras'}</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
