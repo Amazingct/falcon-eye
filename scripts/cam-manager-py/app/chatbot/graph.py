@@ -3,6 +3,7 @@ LangGraph Chatbot with Claude
 Streaming chat with tool support (tools loaded from config)
 """
 import os
+import asyncio
 from typing import Annotated, TypedDict, Sequence, AsyncGenerator, Any
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
@@ -154,16 +155,18 @@ async def stream_chat(
             return "".join(texts)
         return ""
     
-    # Loop to handle multiple rounds of tool calls
+    # Emit thinking immediately so user sees loading while we process
+    # First, do a non-streaming call to check if tools will be used
+    # Then stream the final response
+    
     for round_num in range(max_tool_rounds + 1):
         collected_text = []
         tool_calls = []
-        has_tool_calls = False
         
+        # Collect full response first (don't stream yet)
         async for chunk in llm.astream(lc_messages):
             # Collect tool calls
             if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                has_tool_calls = True
                 for tc in chunk.tool_call_chunks:
                     if tc.get("index") is not None:
                         idx = tc["index"]
@@ -176,20 +179,27 @@ async def stream_chat(
                         if tc.get("id"):
                             tool_calls[idx]["id"] = tc["id"]
             
-            # Collect/stream text
+            # Collect text (buffer it, don't stream yet)
             if hasattr(chunk, "content") and chunk.content:
                 text = extract_text(chunk.content)
                 if text:
                     collected_text.append(text)
-                    # Only stream if no tool calls (yet)
-                    if not has_tool_calls:
-                        yield ("text", text)
         
-        # If no tool calls, we're done
-        if not tool_calls or not any(tc["name"] for tc in tool_calls):
+        # Check if there are tool calls
+        has_tools = tool_calls and any(tc["name"] for tc in tool_calls)
+        
+        # If no tool calls, this is the final response - stream it
+        if not has_tools:
+            # Stream collected text token by token (simulate streaming)
+            full_text = "".join(collected_text)
+            # Yield in small chunks for smooth streaming effect
+            chunk_size = 10
+            for i in range(0, len(full_text), chunk_size):
+                yield ("text", full_text[i:i+chunk_size])
+                await asyncio.sleep(0.01)  # Small delay for smooth streaming
             break
         
-        # Execute tools
+        # Tools need to be executed - show thinking state
         yield ("thinking", "")
         
         ai_message_content = "".join(collected_text)
