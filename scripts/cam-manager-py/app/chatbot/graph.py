@@ -226,7 +226,8 @@ async def stream_chat(
             if tool_name in tools_by_name:
                 tool = tools_by_name[tool_name]
                 try:
-                    result = tool.invoke(tool_args)
+                    # Run sync tool in thread pool to avoid blocking async event loop
+                    result = await asyncio.to_thread(tool.invoke, tool_args)
                     tool_results.append(ToolMessage(
                         content=str(result),
                         tool_call_id=tc["id"],

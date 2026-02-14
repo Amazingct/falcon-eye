@@ -1,15 +1,25 @@
 """
 Falcon-Eye Chatbot Tools (Read-Only)
 Default tools for checking cluster and camera status
+Uses sync httpx with thread pool to avoid blocking async event loop
 """
 from typing import Optional
 from langchain_core.tools import tool
 import httpx
-
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 # Base URL for internal API calls (FastAPI runs on port 8000)
 API_BASE = "http://localhost:8000"
-DEFAULT_TIMEOUT = 30  # Increased timeout for reliability
+DEFAULT_TIMEOUT = 30
+
+# Thread pool for running sync HTTP calls
+_executor = ThreadPoolExecutor(max_workers=4)
+
+
+def _sync_get(url: str, timeout: int = DEFAULT_TIMEOUT) -> httpx.Response:
+    """Make synchronous GET request"""
+    return httpx.get(url, timeout=timeout)
 
 
 @tool
@@ -18,7 +28,7 @@ def get_cameras() -> str:
     Returns camera names, protocols, status (running/stopped/error), and node locations.
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/cameras/", timeout=DEFAULT_TIMEOUT)
+        response = _sync_get(f"{API_BASE}/api/cameras/")
         if response.status_code != 200:
             return f"Error fetching cameras: {response.status_code}"
         
@@ -52,7 +62,7 @@ def get_camera_details(camera_name: str) -> str:
         camera_name: The name of the camera to look up
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/cameras/", timeout=DEFAULT_TIMEOUT)
+        response = _sync_get(f"{API_BASE}/api/cameras/")
         if response.status_code != 200:
             return f"Error fetching cameras: {response.status_code}"
         
@@ -103,7 +113,7 @@ def get_cluster_nodes() -> str:
     Shows node names, IPs, ready status, and architecture.
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/nodes/", timeout=DEFAULT_TIMEOUT)
+        response = _sync_get(f"{API_BASE}/api/nodes/")
         if response.status_code != 200:
             return f"Error fetching nodes: {response.status_code}"
         
@@ -137,15 +147,15 @@ def get_system_status() -> str:
     """
     try:
         # Check API health
-        health_response = httpx.get(f"{API_BASE}/health", timeout=DEFAULT_TIMEOUT)
+        health_response = _sync_get(f"{API_BASE}/health")
         api_healthy = health_response.status_code == 200
         
         # Get cameras
-        cameras_response = httpx.get(f"{API_BASE}/api/cameras/", timeout=DEFAULT_TIMEOUT)
+        cameras_response = _sync_get(f"{API_BASE}/api/cameras/")
         cameras = cameras_response.json().get("cameras", []) if cameras_response.status_code == 200 else []
         
         # Get nodes
-        nodes_response = httpx.get(f"{API_BASE}/api/nodes/", timeout=DEFAULT_TIMEOUT)
+        nodes_response = _sync_get(f"{API_BASE}/api/nodes/")
         nodes = nodes_response.json() if nodes_response.status_code == 200 else []
         
         # Calculate stats
@@ -179,7 +189,7 @@ def get_settings() -> str:
     Shows default resolution, framerate, cleanup interval, and node IPs.
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/settings/", timeout=DEFAULT_TIMEOUT)
+        response = _sync_get(f"{API_BASE}/api/settings/")
         if response.status_code != 200:
             return f"Error fetching settings: {response.status_code}"
         
