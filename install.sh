@@ -205,6 +205,42 @@ configure_options() {
     
     echo -e "${YELLOW}[3.5/8] Optional Configuration...${NC}"
     echo ""
+    
+    # Node selection for PostgreSQL
+    echo -e "  ${CYAN}Select node for PostgreSQL (database):${NC}"
+    echo -e "  PostgreSQL requires persistent storage - choose a reliable node."
+    echo ""
+    
+    # Get nodes and display options
+    NODES=($(kubectl get nodes --no-headers -o custom-columns=":metadata.name" 2>/dev/null))
+    NODE_COUNT=${#NODES[@]}
+    
+    if [ $NODE_COUNT -gt 1 ]; then
+        for i in "${!NODES[@]}"; do
+            NODE_STATUS=$(kubectl get node ${NODES[$i]} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+            STATUS_ICON="🟢"
+            [ "$NODE_STATUS" != "True" ] && STATUS_ICON="🔴"
+            echo -e "    ${CYAN}$((i+1)))${NC} ${NODES[$i]} ${STATUS_ICON}"
+        done
+        echo -e "    ${CYAN}0)${NC} Auto (let Kubernetes decide)"
+        echo ""
+        read -p "  Choose node [0-${NODE_COUNT}] (default: 0): " POSTGRES_NODE_CHOICE
+        
+        if [ -n "$POSTGRES_NODE_CHOICE" ] && [ "$POSTGRES_NODE_CHOICE" != "0" ] && [ "$POSTGRES_NODE_CHOICE" -le "$NODE_COUNT" ] 2>/dev/null; then
+            POSTGRES_NODE="${NODES[$((POSTGRES_NODE_CHOICE-1))]}"
+            echo -e "${GREEN}  ✓ PostgreSQL will deploy to: ${POSTGRES_NODE}${NC}"
+        else
+            POSTGRES_NODE=""
+            echo -e "${GREEN}  ✓ PostgreSQL: auto-assigned${NC}"
+        fi
+    else
+        POSTGRES_NODE=""
+        echo -e "  Single node cluster - using: ${NODES[0]}"
+    fi
+    echo ""
+    
+    # Anthropic API key
+    echo -e "  ${CYAN}AI Chatbot Configuration:${NC}"
     echo -e "  The AI chatbot requires an Anthropic API key."
     echo -e "  Get one at: ${CYAN}https://console.anthropic.com/settings/keys${NC}"
     echo ""
@@ -271,6 +307,8 @@ spec:
       labels:
         app: postgres
     spec:
+$([ -n "$POSTGRES_NODE" ] && echo "      nodeSelector:
+        kubernetes.io/hostname: ${POSTGRES_NODE}")
       containers:
       - name: postgres
         image: postgres:15-alpine
