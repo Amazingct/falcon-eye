@@ -397,11 +397,11 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
       {cameras.map(camera => (
         <div
           key={camera.id}
-          className={`bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition ${isBusy(camera) ? 'opacity-75' : ''}`}
+          className={`bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition h-[280px] flex flex-col ${isBusy(camera) ? 'opacity-75' : ''}`}
         >
           {/* Stream Preview */}
           <div
-            className="aspect-video bg-gray-900 relative cursor-pointer"
+            className="h-[160px] bg-gray-900 relative cursor-pointer flex-shrink-0"
             onClick={() => !isBusy(camera) && onSelect(camera)}
           >
             {camera.status === 'running' ? (
@@ -467,17 +467,17 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
           </div>
           
           {/* Camera Info */}
-          <div className="p-3">
+          <div className="p-3 flex-1 flex flex-col">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold truncate">{camera.name}</h3>
               <span className="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded uppercase">
                 {camera.protocol}
               </span>
             </div>
-            <p className="text-sm text-gray-400 truncate mb-3">{camera.node_name}</p>
+            <p className="text-sm text-gray-400 truncate flex-1">{camera.node_name}</p>
             
             {/* Actions */}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mt-auto pt-2">
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => onToggle(camera)}
