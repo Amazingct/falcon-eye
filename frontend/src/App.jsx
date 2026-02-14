@@ -747,7 +747,6 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
   const [errors, setErrors] = useState([])
   const [selected, setSelected] = useState(new Set())
   const [adding, setAdding] = useState(false)
-  const [scanNetwork, setScanNetwork] = useState(false)
 
   const scanCameras = async () => {
     setScanning(true)
@@ -757,10 +756,8 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
     setSelected(new Set())
     
     try {
-      const url = scanNetwork 
-        ? `${API_URL}/nodes/scan/cameras?network=true`
-        : `${API_URL}/nodes/scan/cameras`
-      const res = await fetch(url)
+      // Always scan network + USB
+      const res = await fetch(`${API_URL}/nodes/scan/cameras?network=true`)
       if (!res.ok) throw new Error('Scan failed')
       const data = await res.json()
       setCameras(data.cameras || [])
@@ -890,16 +887,6 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
               <p className="text-gray-400 mb-2">No cameras found</p>
               <p className="text-sm text-gray-500 mb-4">Scanned: {scannedNodes.join(', ') || 'none'}</p>
               
-              <label className="flex items-center justify-center space-x-2 mb-4 text-sm">
-                <input
-                  type="checkbox"
-                  checked={scanNetwork}
-                  onChange={e => setScanNetwork(e.target.checked)}
-                  className="rounded bg-gray-700 border-gray-600"
-                />
-                <span className="text-gray-400">Also scan network (slower)</span>
-              </label>
-              
               <button
                 onClick={scanCameras}
                 className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition"
@@ -952,24 +939,13 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
                 ))}
               </div>
               
-              <div className="flex items-center space-x-3 mt-4">
-                <label className="flex items-center space-x-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={scanNetwork}
-                    onChange={e => setScanNetwork(e.target.checked)}
-                    className="rounded bg-gray-700 border-gray-600"
-                  />
-                  <span className="text-gray-400">Network scan</span>
-                </label>
-                <button
-                  onClick={scanCameras}
-                  className="flex-1 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                  <span>Rescan</span>
-                </button>
-              </div>
+              <button
+                onClick={scanCameras}
+                className="w-full mt-4 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
+              >
+                <RefreshCw className="h-4 w-4" />
+                <span>Rescan</span>
+              </button>
             </>
           )}
         </div>
