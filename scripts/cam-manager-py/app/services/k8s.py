@@ -119,7 +119,7 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
             "labels": {
                 "app": "falcon-eye",
                 "component": "recorder",
-                "camera-id": str(camera.id),
+                "recorder-for": str(camera.id),
             },
         },
         "spec": {
@@ -128,7 +128,7 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
                 "matchLabels": {
                     "app": "falcon-eye",
                     "component": "recorder",
-                    "camera-id": str(camera.id),
+                    "recorder-for": str(camera.id),
                 },
             },
             "template": {
@@ -136,7 +136,7 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
                     "labels": {
                         "app": "falcon-eye",
                         "component": "recorder",
-                        "camera-id": str(camera.id),
+                        "recorder-for": str(camera.id),
                     },
                 },
                 "spec": {
@@ -191,7 +191,7 @@ def generate_recorder_service(camera: Camera, deployment_name: str) -> tuple[dic
             "labels": {
                 "app": "falcon-eye",
                 "component": "recorder",
-                "camera-id": str(camera.id),
+                "recorder-for": str(camera.id),
             },
         },
         "spec": {
@@ -199,7 +199,7 @@ def generate_recorder_service(camera: Camera, deployment_name: str) -> tuple[dic
             "selector": {
                 "app": "falcon-eye",
                 "component": "recorder",
-                "camera-id": str(camera.id),
+                "recorder-for": str(camera.id),
             },
             "ports": [
                 {"port": 8080, "targetPort": 8080, "name": "http"},
@@ -371,7 +371,7 @@ async def delete_recorder_deployment(camera_id: str):
     try:
         deployments = apps_api.list_namespaced_deployment(
             namespace=settings.k8s_namespace,
-            label_selector=f"component=recorder,camera-id={camera_id}",
+            label_selector=f"component=recorder,recorder-for={camera_id}",
         )
         for dep in deployments.items:
             apps_api.delete_namespaced_deployment(
@@ -387,7 +387,7 @@ async def delete_recorder_deployment(camera_id: str):
     try:
         services = core_api.list_namespaced_service(
             namespace=settings.k8s_namespace,
-            label_selector=f"component=recorder,camera-id={camera_id}",
+            label_selector=f"component=recorder,recorder-for={camera_id}",
         )
         for svc in services.items:
             core_api.delete_namespaced_service(

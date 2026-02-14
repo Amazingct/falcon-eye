@@ -582,7 +582,7 @@ async def _get_recorder_url(camera_id: str) -> str:
     try:
         services = k8s.core_api.list_namespaced_service(
             namespace=settings.k8s_namespace,
-            label_selector=f"component=recorder,camera-id={camera_id}",
+            label_selector=f"component=recorder,recorder-for={camera_id}",
         )
         if services.items:
             svc = services.items[0]
