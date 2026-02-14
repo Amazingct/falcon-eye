@@ -27,26 +27,129 @@ echo "║         Distributed Camera Streaming for K8s              ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
+# Install k3s cluster
+install_k3s() {
+    echo -e "${YELLOW}Installing k3s...${NC}"
+    
+    # Install k3s
+    curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+    
+    # Wait for k3s to be ready
+    echo -e "${YELLOW}Waiting for k3s to start...${NC}"
+    sleep 10
+    
+    # Set up kubeconfig
+    mkdir -p ~/.kube
+    sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+    sudo chown $(id -u):$(id -g) ~/.kube/config
+    export KUBECONFIG=~/.kube/config
+    
+    # Wait for node to be ready
+    echo -e "${YELLOW}Waiting for node to be ready...${NC}"
+    kubectl wait --for=condition=Ready node --all --timeout=120s
+    
+    echo -e "${GREEN}✓ k3s installed successfully${NC}"
+}
+
+# Set up kubeconfig from user input
+setup_kubeconfig() {
+    echo -e "${YELLOW}Please paste your kubeconfig content below.${NC}"
+    echo -e "${YELLOW}When done, press Enter, then Ctrl+D (or type 'EOF' on a new line):${NC}"
+    echo ""
+    
+    mkdir -p ~/.kube
+    
+    # Read multiline input
+    KUBECONFIG_CONTENT=""
+    while IFS= read -r line; do
+        [[ "$line" == "EOF" ]] && break
+        KUBECONFIG_CONTENT+="$line"$'\n'
+    done
+    
+    echo "$KUBECONFIG_CONTENT" > ~/.kube/config
+    chmod 600 ~/.kube/config
+    export KUBECONFIG=~/.kube/config
+    
+    echo -e "${GREEN}✓ Kubeconfig saved to ~/.kube/config${NC}"
+}
+
 # Check prerequisites
 check_prerequisites() {
     echo -e "${YELLOW}[1/8] Checking prerequisites...${NC}"
     
+    # Check for kubectl
     if ! command -v kubectl &> /dev/null; then
-        echo -e "${RED}✗ kubectl not found. Please install kubectl first.${NC}"
-        echo "  Visit: https://kubernetes.io/docs/tasks/tools/"
-        exit 1
+        echo -e "${YELLOW}⚠ kubectl not found. Installing...${NC}"
+        
+        # Detect OS and architecture
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        ARCH=$(uname -m)
+        case $ARCH in
+            x86_64) ARCH="amd64" ;;
+            aarch64|arm64) ARCH="arm64" ;;
+            armv7l) ARCH="arm" ;;
+        esac
+        
+        # Download kubectl
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/${OS}/${ARCH}/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+        
+        if command -v kubectl &> /dev/null; then
+            echo -e "${GREEN}✓ kubectl installed${NC}"
+        else
+            echo -e "${RED}✗ Failed to install kubectl${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${GREEN}✓ kubectl found${NC}"
     fi
-    echo -e "${GREEN}✓ kubectl found${NC}"
     
-    if ! kubectl cluster-info &> /dev/null; then
-        echo -e "${RED}✗ Cannot connect to Kubernetes cluster.${NC}"
+    # Check for cluster connection
+    if ! kubectl cluster-info &> /dev/null 2>&1; then
+        echo -e "${YELLOW}⚠ Cannot connect to Kubernetes cluster.${NC}"
         echo ""
-        echo "Please ensure:"
-        echo "  1. Your kubeconfig is set up (~/.kube/config)"
-        echo "  2. Or set KUBECONFIG environment variable"
+        echo -e "What would you like to do?"
+        echo -e "  ${CYAN}1)${NC} Install k3s on this machine (recommended for single-node setup)"
+        echo -e "  ${CYAN}2)${NC} Paste existing kubeconfig (for remote cluster)"
+        echo -e "  ${CYAN}3)${NC} Exit and configure manually"
         echo ""
-        exit 1
+        
+        read -p "Enter choice [1-3]: " CLUSTER_CHOICE
+        
+        case $CLUSTER_CHOICE in
+            1)
+                echo ""
+                echo -e "${YELLOW}This will install k3s on this machine.${NC}"
+                read -p "Continue? [y/N]: " CONFIRM_K3S
+                if [[ "$CONFIRM_K3S" =~ ^[Yy]$ ]]; then
+                    install_k3s
+                else
+                    echo -e "${RED}Aborted.${NC}"
+                    exit 1
+                fi
+                ;;
+            2)
+                echo ""
+                setup_kubeconfig
+                
+                # Verify connection
+                if ! kubectl cluster-info &> /dev/null 2>&1; then
+                    echo -e "${RED}✗ Still cannot connect. Please check your kubeconfig.${NC}"
+                    exit 1
+                fi
+                ;;
+            3|*)
+                echo ""
+                echo -e "Please configure kubectl manually:"
+                echo "  1. Set up ~/.kube/config"
+                echo "  2. Or set KUBECONFIG environment variable"
+                echo "  3. Run this installer again"
+                exit 1
+                ;;
+        esac
     fi
+    
     echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
     
     CLUSTER_NAME=$(kubectl config current-context 2>/dev/null || echo "unknown")
