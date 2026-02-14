@@ -155,6 +155,10 @@ async def create_camera(
                 detail="This camera is still being deleted. Please wait."
             )
     
+    # Network cameras (rtsp, onvif, http) start in stopped state
+    # User must edit with credentials then start manually
+    is_network_camera = camera_data.protocol.value in ["rtsp", "onvif", "http"]
+    
     # Create camera record
     camera = Camera(
         id=uuid4(),
@@ -167,25 +171,27 @@ async def create_camera(
         resolution=camera_data.resolution or settings.default_resolution,
         framerate=camera_data.framerate or settings.default_framerate,
         metadata=camera_data.metadata or {},
-        status=CameraStatus.CREATING.value,
+        status=CameraStatus.STOPPED.value if is_network_camera else CameraStatus.CREATING.value,
     )
     
     db.add(camera)
     await db.flush()
     
-    # Create K8s deployment
-    try:
-        k8s_result = await k8s.create_camera_deployment(camera)
-        
-        camera.deployment_name = k8s_result["deployment_name"]
-        camera.service_name = k8s_result["service_name"]
-        camera.stream_port = k8s_result["stream_port"]
-        camera.control_port = k8s_result["control_port"]
-        camera.status = CameraStatus.RUNNING.value
-        
-    except Exception as e:
-        camera.status = CameraStatus.ERROR.value
-        camera.metadata = {**camera.metadata, "error": str(e)}
+    # Only create K8s deployment for USB cameras immediately
+    # Network cameras wait for user to edit and start manually
+    if not is_network_camera:
+        try:
+            k8s_result = await k8s.create_camera_deployment(camera)
+            
+            camera.deployment_name = k8s_result["deployment_name"]
+            camera.service_name = k8s_result["service_name"]
+            camera.stream_port = k8s_result["stream_port"]
+            camera.control_port = k8s_result["control_port"]
+            camera.status = CameraStatus.RUNNING.value
+            
+        except Exception as e:
+            camera.status = CameraStatus.ERROR.value
+            camera.metadata = {**camera.metadata, "error": str(e)}
     
     await db.commit()
     await db.refresh(camera)

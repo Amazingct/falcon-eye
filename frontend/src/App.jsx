@@ -294,6 +294,12 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }
                   {isCreating(camera) ? 'Starting camera...' : 'Removing...'}
                 </p>
               </div>
+            ) : camera.status === 'stopped' ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+                <Settings className="h-12 w-12 text-gray-500 mb-2" />
+                <p className="text-sm text-gray-400">Click Edit to configure</p>
+                <p className="text-xs text-gray-500">then Start to begin streaming</p>
+              </div>
             ) : (
               <div className="absolute inset-0 flex items-center justify-center">
                 <WifiOff className="h-12 w-12 text-gray-600" />
@@ -307,13 +313,16 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart }
                 ? 'bg-blue-500/20 text-blue-400'
                 : camera.status === 'deleting'
                 ? 'bg-yellow-500/20 text-yellow-400'
+                : camera.status === 'stopped'
+                ? 'bg-gray-500/20 text-gray-400'
                 : 'bg-red-500/20 text-red-400'
             }`}>
               {isBusy(camera) && <Loader2 className="h-3 w-3 animate-spin" />}
               <span>
                 {camera.status === 'running' ? 'LIVE' : 
                  isCreating(camera) ? 'ADDING...' :
-                 camera.status === 'deleting' ? 'DELETING...' : 'OFFLINE'}
+                 camera.status === 'deleting' ? 'DELETING...' :
+                 camera.status === 'stopped' ? 'STOPPED' : 'ERROR'}
               </span>
             </div>
           </div>
