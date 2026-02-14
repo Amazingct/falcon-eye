@@ -1437,13 +1437,26 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6))
+              // Handle content - can be string or array of content blocks
               if (data.content) {
-                assistantContent += data.content
-                setMessages(prev => {
-                  const updated = [...prev]
-                  updated[updated.length - 1] = { role: 'assistant', content: assistantContent }
-                  return updated
-                })
+                let text = ''
+                if (typeof data.content === 'string') {
+                  text = data.content
+                } else if (Array.isArray(data.content)) {
+                  // Extract text from content blocks [{text: "...", type: "text"}]
+                  text = data.content
+                    .filter(block => block.type === 'text')
+                    .map(block => block.text)
+                    .join('')
+                }
+                if (text) {
+                  assistantContent += text
+                  setMessages(prev => {
+                    const updated = [...prev]
+                    updated[updated.length - 1] = { role: 'assistant', content: assistantContent }
+                    return updated
+                  })
+                }
               }
             } catch (e) {
               // Ignore parse errors

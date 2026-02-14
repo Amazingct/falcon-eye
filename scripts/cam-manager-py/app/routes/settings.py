@@ -1,10 +1,11 @@
 """Settings API routes"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 import logging
+import time
 
 from app.config import get_settings
 
@@ -256,13 +257,41 @@ async def update_settings(update: SettingsUpdate):
     return await get_current_settings()
 
 
-@router.post("/restart-all", response_model=RestartResponse)
-async def restart_all_deployments():
-    """Restart all Falcon-Eye deployments to apply new settings"""
-    import time
+def _do_restart_deployments(deployment_names: list[str], namespace: str):
+    """Background task to restart deployments (runs after response is sent)"""
+    import time as time_module
     apps_api = get_apps_api()
     
-    restarted = []
+    patch = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "kubectl.kubernetes.io/restartedAt": time_module.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    }
+                }
+            }
+        }
+    }
+    
+    for dep_name in deployment_names:
+        try:
+            apps_api.patch_namespaced_deployment(
+                name=dep_name,
+                namespace=namespace,
+                body=patch,
+            )
+            logger.info(f"Restarted deployment: {dep_name}")
+        except ApiException as e:
+            logger.error(f"Failed to restart {dep_name}: {e}")
+
+
+@router.post("/restart-all", response_model=RestartResponse)
+async def restart_all_deployments(background_tasks: BackgroundTasks):
+    """Restart all Falcon-Eye deployments to apply new settings"""
+    apps_api = get_apps_api()
+    
+    to_restart = []
     
     try:
         # List all Falcon-Eye deployments
@@ -271,32 +300,11 @@ async def restart_all_deployments():
             label_selector="app=falcon-eye"
         )
         
-        # Restart each deployment by patching restart annotation
-        patch = {
-            "spec": {
-                "template": {
-                    "metadata": {
-                        "annotations": {
-                            "kubectl.kubernetes.io/restartedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ")
-                        }
-                    }
-                }
-            }
-        }
-        
         for dep in deployments.items:
-            try:
-                apps_api.patch_namespaced_deployment(
-                    name=dep.metadata.name,
-                    namespace=settings.k8s_namespace,
-                    body=patch,
-                )
-                restarted.append(dep.metadata.name)
-                logger.info(f"Restarted deployment: {dep.metadata.name}")
-            except ApiException as e:
-                logger.error(f"Failed to restart {dep.metadata.name}: {e}")
+            to_restart.append(dep.metadata.name)
         
         # Also update CronJob if schedule changed
+        cronjob_updated = False
         try:
             core_api = get_core_api()
             cm = core_api.read_namespaced_config_map(
@@ -315,14 +323,21 @@ async def restart_all_deployments():
                     namespace=settings.k8s_namespace,
                     body=cron_patch,
                 )
-                restarted.append("falcon-eye-cleanup (cronjob)")
+                cronjob_updated = True
                 logger.info("Updated cleanup CronJob schedule")
         except ApiException:
             pass  # CronJob might not exist yet
         
+        # Schedule restart in background (after response is sent)
+        background_tasks.add_task(_do_restart_deployments, to_restart, settings.k8s_namespace)
+        
+        result = to_restart.copy()
+        if cronjob_updated:
+            result.append("falcon-eye-cleanup (cronjob)")
+        
         return RestartResponse(
-            message=f"Restarted {len(restarted)} deployment(s)",
-            restarted=restarted,
+            message=f"Scheduled restart for {len(to_restart)} deployment(s)",
+            restarted=result,
         )
         
     except ApiException as e:
