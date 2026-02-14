@@ -7,6 +7,7 @@ from app.services.k8s import K8sService
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
 
+@router.get("/")
 @router.get("")
 async def list_nodes():
     """Get all cluster nodes"""

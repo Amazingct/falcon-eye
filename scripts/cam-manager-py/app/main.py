@@ -30,6 +30,7 @@ app = FastAPI(
     description="Camera management API for home lab K8s clusters",
     version="1.0.0",
     lifespan=lifespan,
+    redirect_slashes=False,
 )
 
 # CORS middleware
