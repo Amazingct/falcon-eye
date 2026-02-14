@@ -13,20 +13,36 @@ REST API for managing cameras in the Falcon-Eye system, built with FastAPI.
 
 ## Quick Start
 
-### Local Development
+### Local Development (Poetry)
+
+```bash
+# Install Poetry (if not installed)
+curl -sSL https://install.python-poetry.org | python3 -
+
+# Install dependencies
+poetry install
+
+# Set environment
+cp .env.example .env
+# Edit .env with your settings
+
+# Run
+poetry run uvicorn app.main:app --reload --port 3000
+
+# Or activate shell
+poetry shell
+uvicorn app.main:app --reload --port 3000
+```
+
+### Local Development (pip - legacy)
 
 ```bash
 # Create virtual environment
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-# or: venv\Scripts\activate  # Windows
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Set environment
-cp .env.example .env
-# Edit .env with your settings
 
 # Run
 uvicorn app.main:app --reload --port 3000
@@ -127,13 +143,19 @@ cam-manager-py/
 │   │   ├── camera.py     # SQLAlchemy models
 │   │   └── schemas.py    # Pydantic schemas
 │   ├── routes/
-│   │   └── cameras.py    # API routes
-│   └── services/
-│       ├── k8s.py        # K8s deployment
-│       └── converters.py # Protocol converters
+│   │   ├── cameras.py    # Camera API routes
+│   │   ├── nodes.py      # Node/scan routes
+│   │   └── settings.py   # Settings routes
+│   ├── services/
+│   │   ├── k8s.py        # K8s deployment
+│   │   └── converters.py # Protocol converters
+│   └── tasks/
+│       └── cleanup.py    # Orphan pod cleanup
 ├── k8s/
 │   └── cam-manager.yaml  # K8s manifests
-├── requirements.txt
+├── pyproject.toml        # Poetry config
+├── poetry.lock           # Locked dependencies
+├── requirements.txt      # Legacy pip support
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example

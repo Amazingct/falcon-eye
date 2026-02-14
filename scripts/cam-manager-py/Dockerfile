@@ -9,11 +9,28 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+# Install Poetry
+ENV POETRY_HOME=/opt/poetry \
+    POETRY_VIRTUALENVS_IN_PROJECT=true \
+    POETRY_NO_INTERACTION=1
+RUN curl -sSL https://install.python-poetry.org | python3 - && \
+    ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry
+
+# Copy Poetry files
+COPY pyproject.toml poetry.lock* ./
+
+# Generate lock file if not present, then install dependencies
+RUN poetry lock --no-update 2>/dev/null || true && \
+    poetry install --no-root --only main
+
+# Copy application
+COPY app/ ./app/
+
+# Install the project itself
+RUN poetry install --only main
 
 
 # Production image
@@ -31,24 +48,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user first
+# Create non-root user
 RUN useradd -m -u 1001 falcon
 
-# Copy Python packages from builder to falcon user's local
-COPY --from=builder /root/.local /home/falcon/.local
-RUN chown -R falcon:falcon /home/falcon/.local
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
 
 # Copy application
-COPY app/ ./app/
+COPY --from=builder /app/app ./app/
+
 RUN chown -R falcon:falcon /app
 
 USER falcon
 
-# Set PATH for falcon user
-ENV PATH=/home/falcon/.local/bin:$PATH
-
-# Environment defaults
-ENV PYTHONUNBUFFERED=1 \
+# Set PATH to use virtualenv
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=3000 \
     DB_HOST=postgres \
