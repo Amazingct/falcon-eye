@@ -160,7 +160,11 @@ async def list_sessions(
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
-    """List all chat sessions"""
+    """List all chat sessions with message counts"""
+    from sqlalchemy import func
+    from sqlalchemy.orm import selectinload
+    
+    # Get sessions with message count via subquery
     result = await db.execute(
         select(ChatSession)
         .order_by(ChatSession.updated_at.desc())
@@ -169,8 +173,20 @@ async def list_sessions(
     )
     sessions = result.scalars().all()
     
+    # Get message counts for all sessions
+    session_ids = [s.id for s in sessions]
+    if session_ids:
+        count_result = await db.execute(
+            select(ChatMessage.session_id, func.count(ChatMessage.id))
+            .where(ChatMessage.session_id.in_(session_ids))
+            .group_by(ChatMessage.session_id)
+        )
+        counts = {row[0]: row[1] for row in count_result.fetchall()}
+    else:
+        counts = {}
+    
     return {
-        "sessions": [s.to_dict() for s in sessions],
+        "sessions": [s.to_dict(message_count=counts.get(s.id, 0)) for s in sessions],
         "count": len(sessions),
     }
 
@@ -188,7 +204,7 @@ async def create_session(
     await db.commit()
     await db.refresh(session)
     
-    return session.to_dict()
+    return session.to_dict(message_count=0)
 
 
 @router.get("/sessions/{session_id}")
@@ -197,8 +213,12 @@ async def get_session(
     db: AsyncSession = Depends(get_db),
 ):
     """Get a session with all messages"""
+    from sqlalchemy.orm import selectinload
+    
     result = await db.execute(
-        select(ChatSession).where(ChatSession.id == session_id)
+        select(ChatSession)
+        .options(selectinload(ChatSession.messages))
+        .where(ChatSession.id == session_id)
     )
     session = result.scalar_one_or_none()
     
@@ -215,6 +235,8 @@ async def update_session(
     db: AsyncSession = Depends(get_db),
 ):
     """Rename a session"""
+    from sqlalchemy import func
+    
     result = await db.execute(
         select(ChatSession).where(ChatSession.id == session_id)
     )
@@ -227,7 +249,13 @@ async def update_session(
     await db.commit()
     await db.refresh(session)
     
-    return session.to_dict()
+    # Get message count
+    count_result = await db.execute(
+        select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
+    )
+    msg_count = count_result.scalar() or 0
+    
+    return session.to_dict(message_count=msg_count)
 
 
 @router.delete("/sessions/{session_id}")

@@ -20,16 +20,20 @@ class ChatSession(Base):
     # Relationship to messages
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan", order_by="ChatMessage.created_at")
     
-    def to_dict(self, include_messages: bool = False) -> dict:
+    def to_dict(self, include_messages: bool = False, message_count: int = None) -> dict:
+        """Convert to dict. Pass message_count separately to avoid lazy loading issues in async."""
         result = {
             "id": str(self.id),
             "name": self.name,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "message_count": len(self.messages) if self.messages else 0,
         }
+        # Only include message_count if explicitly provided (avoids lazy load in async)
+        if message_count is not None:
+            result["message_count"] = message_count
         if include_messages:
             result["messages"] = [m.to_dict() for m in self.messages]
+            result["message_count"] = len(self.messages)
         return result
 
 
