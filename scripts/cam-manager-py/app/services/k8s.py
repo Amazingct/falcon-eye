@@ -311,14 +311,10 @@ async def create_camera_deployment(camera: Camera) -> dict:
 
 async def create_recorder_deployment(camera: Camera, stream_port: int, node_ip: str = None) -> dict:
     """Create K8s deployment for camera recorder"""
-    # Build stream URL - recorder needs to connect to the HLS stream
-    if node_ip:
-        stream_url = f"http://{node_ip}:{stream_port}/hls/stream.m3u8"
-    else:
-        # Use service DNS if no node IP
-        name_slug = camera.name.lower().replace(" ", "-").replace("_", "-")
-        name_slug = "".join(c for c in name_slug if c.isalnum() or c == "-")
-        stream_url = f"http://svc-{name_slug}.{settings.k8s_namespace}.svc.cluster.local:8081/hls/stream.m3u8"
+    # Build stream URL - always use internal ClusterIP service (NodePort not reliably accessible from pods)
+    name_slug = camera.name.lower().replace(" ", "-").replace("_", "-")
+    name_slug = "".join(c for c in name_slug if c.isalnum() or c == "-")
+    stream_url = f"http://svc-{name_slug}.{settings.k8s_namespace}.svc.cluster.local:8081/hls/stream.m3u8"
     
     deployment, deployment_name = generate_recorder_deployment(camera, stream_url)
     service, service_name = generate_recorder_service(camera, deployment_name)
