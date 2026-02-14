@@ -361,6 +361,74 @@ async def restart_camera(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{camera_id}/start", response_model=MessageResponse)
+async def start_camera(
+    camera_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Start a stopped camera"""
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    camera = result.scalar_one_or_none()
+    
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    if camera.status == CameraStatus.RUNNING.value:
+        return MessageResponse(message="Camera already running", id=camera_id)
+    
+    # Create deployment if it doesn't exist
+    try:
+        camera.status = CameraStatus.CREATING.value
+        await db.commit()
+        
+        k8s_result = await k8s.create_camera_deployment(camera)
+        
+        camera.deployment_name = k8s_result["deployment_name"]
+        camera.service_name = k8s_result["service_name"]
+        camera.stream_port = k8s_result["stream_port"]
+        camera.control_port = k8s_result["control_port"]
+        camera.status = CameraStatus.RUNNING.value
+        
+        await db.commit()
+        
+        return MessageResponse(message="Camera started", id=camera_id)
+        
+    except Exception as e:
+        camera.status = CameraStatus.ERROR.value
+        await db.commit()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{camera_id}/stop", response_model=MessageResponse)
+async def stop_camera(
+    camera_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Stop a running camera"""
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    camera = result.scalar_one_or_none()
+    
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    
+    if camera.status == CameraStatus.STOPPED.value:
+        return MessageResponse(message="Camera already stopped", id=camera_id)
+    
+    # Delete K8s resources
+    if camera.deployment_name or camera.service_name:
+        await k8s.delete_camera_deployment(
+            camera.deployment_name or "",
+            camera.service_name or "",
+        )
+    
+    camera.status = CameraStatus.STOPPED.value
+    camera.deployment_name = None
+    camera.service_name = None
+    await db.commit()
+    
+    return MessageResponse(message="Camera stopped", id=camera_id)
+
+
 @router.get("/{camera_id}/stream-info", response_model=StreamInfo)
 async def get_stream_info(
     camera_id: UUID,
