@@ -657,6 +657,8 @@ async def start_recording(
     db: AsyncSession = Depends(get_db),
 ):
     """Start recording for a camera. Auto-deploys recorder if not present."""
+    from app.models.recording import Recording, RecordingStatus
+    
     result = await db.execute(select(Camera).where(Camera.id == camera_id))
     camera = result.scalar_one_or_none()
     
@@ -665,6 +667,20 @@ async def start_recording(
     
     if camera.status != CameraStatus.RUNNING.value:
         raise HTTPException(status_code=400, detail="Camera is not running")
+    
+    # Check for existing active recording - only one allowed per camera
+    active_check = await db.execute(
+        select(Recording).where(
+            Recording.camera_id == camera_id,
+            Recording.status == RecordingStatus.RECORDING,
+        )
+    )
+    existing_recording = active_check.scalar_one_or_none()
+    if existing_recording:
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Camera already has an active recording: {existing_recording.id}"
+        )
     
     recorder_url, is_ready = await _get_recorder_url(str(camera_id))
     
