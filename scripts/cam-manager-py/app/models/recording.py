@@ -14,6 +14,7 @@ class RecordingStatus(str, enum.Enum):
     RECORDING = "recording"
     STOPPED = "stopped"
     COMPLETED = "completed"
+    FAILED = "failed"
     ERROR = "error"
 
 

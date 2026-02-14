@@ -92,6 +92,52 @@ async def notify_api_stop(recording_id: str, end_time: datetime, file_size: int)
         print(f"Failed to notify API of recording stop: {e}")
 
 
+async def notify_api_failed(recording_id: str, error_message: str):
+    """Notify main API that recording failed"""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.patch(f"{API_URL}/api/recordings/{recording_id}", json={
+                "end_time": datetime.utcnow().isoformat(),
+                "status": "failed",
+                "error_message": error_message,
+            })
+    except Exception as e:
+        print(f"Failed to notify API of recording failure: {e}")
+
+
+async def monitor_ffmpeg_process(recording_id: str):
+    """Monitor FFmpeg process and report failures"""
+    global current_process, current_recording
+    
+    # Give FFmpeg a moment to start
+    await asyncio.sleep(2)
+    
+    if current_process is None:
+        return
+    
+    # Check if process exited early (failure)
+    exit_code = current_process.poll()
+    if exit_code is not None:
+        # Process exited - check if it's an error
+        stderr_output = ""
+        try:
+            _, stderr = current_process.communicate(timeout=1)
+            stderr_output = stderr.decode()[-500:] if stderr else "Unknown error"
+        except:
+            stderr_output = "Could not read error output"
+        
+        print(f"FFmpeg exited early with code {exit_code}: {stderr_output}")
+        
+        # Notify API of failure
+        await notify_api_failed(recording_id, f"FFmpeg exited with code {exit_code}: {stderr_output}")
+        
+        # Clear state
+        current_process = None
+        current_recording = None
+    else:
+        print(f"FFmpeg recording {recording_id} running successfully")
+
+
 @app.get("/health")
 async def health():
     """Health check"""
@@ -178,6 +224,9 @@ async def start_recording() -> StartResponse:
             ]
         
         try:
+            # Log the command for debugging
+            print(f"Starting FFmpeg with command: {' '.join(cmd)}")
+            
             # Start FFmpeg process
             current_process = subprocess.Popen(
                 cmd,
@@ -194,6 +243,9 @@ async def start_recording() -> StartResponse:
             
             # Notify API (non-blocking)
             asyncio.create_task(notify_api_start(recording_id, file_path, file_name, start_time))
+            
+            # Start background task to monitor FFmpeg process
+            asyncio.create_task(monitor_ffmpeg_process(recording_id))
             
             return StartResponse(
                 success=True,
