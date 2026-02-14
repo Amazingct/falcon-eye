@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+class ChatbotSettings(BaseModel):
+    """Chatbot configuration"""
+    api_key_configured: bool
+    enabled_tools: list[str]
+    available_tools: list[str]
+
+
 class SettingsResponse(BaseModel):
     """Current settings"""
     default_resolution: str
@@ -21,6 +28,7 @@ class SettingsResponse(BaseModel):
     cleanup_interval: str
     creating_timeout_minutes: int
     node_ips: dict[str, str]
+    chatbot: ChatbotSettings
 
 
 class SettingsUpdate(BaseModel):
@@ -29,6 +37,8 @@ class SettingsUpdate(BaseModel):
     default_framerate: Optional[int] = None
     cleanup_interval: Optional[str] = None
     creating_timeout_minutes: Optional[int] = None
+    anthropic_api_key: Optional[str] = None
+    chatbot_tools: Optional[list[str]] = None
 
 
 class RestartResponse(BaseModel):
@@ -49,6 +59,72 @@ def get_core_api():
     return core_api
 
 
+async def _update_api_key_secret(core_api, api_key: str):
+    """Store Anthropic API key in Kubernetes Secret"""
+    import base64
+    
+    secret_name = "falcon-eye-secrets"
+    namespace = settings.k8s_namespace
+    
+    # Encode the key
+    encoded_key = base64.b64encode(api_key.encode()).decode()
+    
+    secret = client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace,
+        ),
+        type="Opaque",
+        data={"ANTHROPIC_API_KEY": encoded_key},
+    )
+    
+    try:
+        # Try to replace existing secret
+        core_api.replace_namespaced_secret(
+            name=secret_name,
+            namespace=namespace,
+            body=secret,
+        )
+    except ApiException as e:
+        if e.status == 404:
+            # Create if doesn't exist
+            core_api.create_namespaced_secret(
+                namespace=namespace,
+                body=secret,
+            )
+        else:
+            raise
+    
+    # Update API deployment to use the secret
+    apps_api = get_apps_api()
+    
+    # Patch deployment to add secret env var
+    patch = {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [{
+                        "name": "api",
+                        "envFrom": [
+                            {"configMapRef": {"name": "falcon-eye-config"}},
+                            {"secretRef": {"name": secret_name, "optional": True}},
+                        ]
+                    }]
+                }
+            }
+        }
+    }
+    
+    try:
+        apps_api.patch_namespaced_deployment(
+            name="falcon-eye-api",
+            namespace=namespace,
+            body=patch,
+        )
+    except ApiException:
+        pass  # Deployment might not exist yet
+
+
 @router.get("/", response_model=SettingsResponse)
 async def get_current_settings():
     """Get current settings"""
@@ -57,6 +133,13 @@ async def get_current_settings():
     default_framerate = settings.default_framerate
     cleanup_interval = "*/10 * * * *"
     creating_timeout = 3
+    
+    # Chatbot settings
+    from app.chatbot.tools import AVAILABLE_TOOLS, DEFAULT_TOOLS
+    import os
+    
+    api_key_configured = bool(os.getenv("ANTHROPIC_API_KEY"))
+    enabled_tools = DEFAULT_TOOLS.copy()
     
     # Try to read overrides from ConfigMap
     try:
@@ -70,6 +153,12 @@ async def get_current_settings():
             default_framerate = int(cm.data.get("DEFAULT_FRAMERATE", default_framerate))
             cleanup_interval = cm.data.get("CLEANUP_INTERVAL", cleanup_interval)
             creating_timeout = int(cm.data.get("CREATING_TIMEOUT_MINUTES", creating_timeout))
+            # Chatbot tools from config
+            if cm.data.get("CHATBOT_TOOLS"):
+                enabled_tools = [t.strip() for t in cm.data.get("CHATBOT_TOOLS", "").split(",") if t.strip()]
+            # Check if API key is in config
+            if cm.data.get("ANTHROPIC_API_KEY"):
+                api_key_configured = True
     except ApiException:
         pass  # ConfigMap doesn't exist, use defaults
     except ValueError:
@@ -90,6 +179,11 @@ async def get_current_settings():
         cleanup_interval=cleanup_interval,
         creating_timeout_minutes=creating_timeout,
         node_ips=node_ips,
+        chatbot=ChatbotSettings(
+            api_key_configured=api_key_configured,
+            enabled_tools=enabled_tools,
+            available_tools=list(AVAILABLE_TOOLS.keys()),
+        ),
     )
 
 
@@ -126,6 +220,12 @@ async def update_settings(update: SettingsUpdate):
         config_data["CLEANUP_INTERVAL"] = update.cleanup_interval
     if update.creating_timeout_minutes:
         config_data["CREATING_TIMEOUT_MINUTES"] = str(update.creating_timeout_minutes)
+    if update.chatbot_tools is not None:
+        config_data["CHATBOT_TOOLS"] = ",".join(update.chatbot_tools)
+    
+    # Handle API key separately (store in Secret for security)
+    if update.anthropic_api_key:
+        await _update_api_key_secret(core_api, update.anthropic_api_key)
     
     # Create or update ConfigMap
     configmap = client.V1ConfigMap(

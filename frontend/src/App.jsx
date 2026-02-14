@@ -1116,6 +1116,8 @@ function SettingsModal({ onClose, onClearAll }) {
           default_framerate: data.default_framerate,
           cleanup_interval: data.cleanup_interval,
           creating_timeout_minutes: data.creating_timeout_minutes,
+          chatbot_tools: data.chatbot?.enabled_tools || [],
+          anthropic_api_key: '',
         })
       } catch (err) {
         setError(err.message)
@@ -1137,7 +1139,7 @@ function SettingsModal({ onClose, onClearAll }) {
         body: JSON.stringify(form),
       })
       if (!res.ok) throw new Error('Failed to save settings')
-      setMessage('Settings saved! Restart deployments to apply.')
+      setMessage(form.anthropic_api_key ? 'Settings saved! Click "Restart All" to apply API key.' : 'Settings saved!')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1267,6 +1269,56 @@ function SettingsModal({ onClose, onClearAll }) {
                       className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm"
                     />
                     <p className="text-xs text-gray-500 mt-1">Auto-stop cameras stuck in "creating" state</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Chatbot Settings */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center space-x-2">
+                  <MessageCircle className="h-4 w-4" />
+                  <span>Chatbot Settings</span>
+                  {settings?.chatbot?.api_key_configured ? (
+                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded">Configured</span>
+                  ) : (
+                    <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">Not configured</span>
+                  )}
+                </h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Anthropic API Key</label>
+                    <input
+                      type="password"
+                      value={form.anthropic_api_key || ''}
+                      onChange={e => setForm({ ...form, anthropic_api_key: e.target.value })}
+                      placeholder={settings?.chatbot?.api_key_configured ? "••••••••••••••••" : "sk-ant-..."}
+                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Required for AI assistant (stored securely)</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Enabled Tools</label>
+                    <div className="space-y-1 max-h-32 overflow-y-auto bg-gray-700/50 rounded p-2">
+                      {settings?.chatbot?.available_tools?.map(tool => (
+                        <label key={tool} className="flex items-center space-x-2 text-sm cursor-pointer hover:bg-gray-600/50 rounded px-1">
+                          <input
+                            type="checkbox"
+                            checked={(form.chatbot_tools || settings?.chatbot?.enabled_tools || []).includes(tool)}
+                            onChange={(e) => {
+                              const current = form.chatbot_tools || settings?.chatbot?.enabled_tools || []
+                              if (e.target.checked) {
+                                setForm({ ...form, chatbot_tools: [...current, tool] })
+                              } else {
+                                setForm({ ...form, chatbot_tools: current.filter(t => t !== tool) })
+                              }
+                            }}
+                            className="rounded bg-gray-600 border-gray-500 text-blue-500"
+                          />
+                          <span className="text-gray-300">{tool.replace(/_/g, ' ')}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">Tools the chatbot can use (read-only access)</p>
                   </div>
                 </div>
               </div>
