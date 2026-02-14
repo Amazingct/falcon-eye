@@ -52,10 +52,13 @@ def get_core_api():
 @router.get("/", response_model=SettingsResponse)
 async def get_current_settings():
     """Get current settings"""
-    # Try to read from ConfigMap
+    # Defaults from env/pydantic settings
+    default_resolution = settings.default_resolution
+    default_framerate = settings.default_framerate
     cleanup_interval = "*/10 * * * *"
     creating_timeout = 3
     
+    # Try to read overrides from ConfigMap
     try:
         core_api = get_core_api()
         cm = core_api.read_namespaced_config_map(
@@ -63,10 +66,14 @@ async def get_current_settings():
             namespace=settings.k8s_namespace
         )
         if cm.data:
+            default_resolution = cm.data.get("DEFAULT_RESOLUTION", default_resolution)
+            default_framerate = int(cm.data.get("DEFAULT_FRAMERATE", default_framerate))
             cleanup_interval = cm.data.get("CLEANUP_INTERVAL", cleanup_interval)
             creating_timeout = int(cm.data.get("CREATING_TIMEOUT_MINUTES", creating_timeout))
     except ApiException:
         pass  # ConfigMap doesn't exist, use defaults
+    except ValueError:
+        pass  # Invalid int conversion, use defaults
     
     # Build node_ips dict from individual settings
     node_ips = {
@@ -77,8 +84,8 @@ async def get_current_settings():
     }
     
     return SettingsResponse(
-        default_resolution=settings.default_resolution,
-        default_framerate=settings.default_framerate,
+        default_resolution=default_resolution,
+        default_framerate=default_framerate,
         k8s_namespace=settings.k8s_namespace,
         cleanup_interval=cleanup_interval,
         creating_timeout_minutes=creating_timeout,
