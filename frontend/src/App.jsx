@@ -1377,7 +1377,31 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [chatStatus, setChatStatus] = useState(null)
+  const [dockedWidth, setDockedWidth] = useState(384) // 24rem default (w-96)
+  const [isResizing, setIsResizing] = useState(false)
   const messagesEndRef = React.useRef(null)
+
+  // Handle resize drag
+  useEffect(() => {
+    if (!isResizing) return
+
+    const handleMouseMove = (e) => {
+      const newWidth = window.innerWidth - e.clientX
+      // Clamp between 300px and 800px
+      setDockedWidth(Math.min(800, Math.max(300, newWidth)))
+    }
+
+    const handleMouseUp = () => {
+      setIsResizing(false)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizing])
 
   // Check chat health on mount
   useEffect(() => {
@@ -1513,11 +1537,24 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
 
   // Chat panel classes based on dock state
   const panelClasses = isDocked
-    ? "fixed top-0 right-0 h-full w-96 bg-gray-800 border-l border-gray-700 shadow-xl z-40 flex flex-col"
+    ? "fixed top-0 right-0 h-full bg-gray-800 border-l border-gray-700 shadow-xl z-40 flex flex-col"
     : "fixed bottom-6 right-6 w-96 h-[500px] bg-gray-800 rounded-lg border border-gray-700 shadow-xl z-50 flex flex-col"
 
   return (
-    <div className={panelClasses}>
+    <div 
+      className={panelClasses}
+      style={isDocked ? { width: `${dockedWidth}px` } : undefined}
+    >
+      {/* Resize handle (only when docked) */}
+      {isDocked && (
+        <div
+          className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-500 transition-colors"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            setIsResizing(true)
+          }}
+        />
+      )}
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-gray-800/90">
         <div className="flex items-center space-x-2">
