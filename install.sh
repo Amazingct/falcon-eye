@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 NAMESPACE="falcon-eye"
 REPO_OWNER="${FALCON_EYE_OWNER:-amazingct}"
 REGISTRY="ghcr.io"
+API_PORT=8000  # Single source of truth for API port
 RELEASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main"
 IS_UPGRADE=false
 
@@ -350,7 +351,7 @@ spec:
         image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
         imagePullPolicy: Always
         ports:
-        - containerPort: 8000
+        - containerPort: ${API_PORT}
         envFrom:
         - configMapRef:
             name: falcon-eye-config
@@ -379,8 +380,8 @@ spec:
   selector:
     app: falcon-eye-api
   ports:
-  - port: 8000
-    targetPort: 8000
+  - port: ${API_PORT}
+    targetPort: ${API_PORT}
     nodePort: 30901
 ---
 apiVersion: v1
@@ -461,7 +462,7 @@ spec:
         - containerPort: 80
         env:
         - name: API_URL
-          value: "http://falcon-eye-api:8000"
+          value: "http://falcon-eye-api:${API_PORT}"
 ---
 apiVersion: v1
 kind: Service
