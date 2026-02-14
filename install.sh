@@ -526,11 +526,6 @@ spec:
             imagePullPolicy: Always
             command: ["python", "-m", "app.tasks.cleanup"]
             env:
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: falcon-eye-db-secret
-                  key: DATABASE_URL
             - name: K8S_NAMESPACE
               value: "${NAMESPACE}"
             envFrom:
