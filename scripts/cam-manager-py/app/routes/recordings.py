@@ -6,6 +6,7 @@ from sqlalchemy import select, update, delete
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from uuid import UUID
 import os
 
 from app.database import get_db
@@ -61,7 +62,11 @@ async def list_recordings(
     query = select(Recording).order_by(Recording.start_time.desc())
     
     if camera_id:
-        query = query.where(Recording.camera_id == camera_id)
+        try:
+            camera_uuid = UUID(camera_id)
+            query = query.where(Recording.camera_id == camera_uuid)
+        except ValueError:
+            pass  # Invalid UUID, skip filter
     if status:
         query = query.where(Recording.status == status)
     
@@ -99,9 +104,14 @@ async def create_recording(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new recording (called by recorder service)"""
+    try:
+        camera_uuid = UUID(data.camera_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid camera_id format")
+    
     recording = Recording(
         id=data.id,
-        camera_id=data.camera_id,
+        camera_id=camera_uuid,
         file_path=data.file_path,
         file_name=data.file_name,
         start_time=datetime.fromisoformat(data.start_time),

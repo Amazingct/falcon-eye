@@ -1,5 +1,6 @@
 """Recording model for video recordings"""
 from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -21,7 +22,7 @@ class Recording(Base):
     __tablename__ = "recordings"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    camera_id = Column(String, ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    camera_id = Column(UUID(as_uuid=True), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
     file_path = Column(String, nullable=False)  # Path to video file
     file_name = Column(String, nullable=False)  # Just the filename
     start_time = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -37,7 +38,7 @@ class Recording(Base):
     def to_dict(self):
         return {
             "id": self.id,
-            "camera_id": self.camera_id,
+            "camera_id": str(self.camera_id) if self.camera_id else None,
             "file_path": self.file_path,
             "file_name": self.file_name,
             "start_time": self.start_time.isoformat() if self.start_time else None,
