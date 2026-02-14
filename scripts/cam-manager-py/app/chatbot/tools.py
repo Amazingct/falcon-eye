@@ -9,6 +9,7 @@ import httpx
 
 # Base URL for internal API calls
 API_BASE = "http://localhost:3000"
+DEFAULT_TIMEOUT = 30  # Increased timeout for reliability
 
 
 @tool
@@ -17,7 +18,7 @@ def get_cameras() -> str:
     Returns camera names, protocols, status (running/stopped/error), and node locations.
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/cameras/", timeout=10)
+        response = httpx.get(f"{API_BASE}/api/cameras/", timeout=DEFAULT_TIMEOUT)
         if response.status_code != 200:
             return f"Error fetching cameras: {response.status_code}"
         
@@ -51,7 +52,7 @@ def get_camera_details(camera_name: str) -> str:
         camera_name: The name of the camera to look up
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/cameras/", timeout=10)
+        response = httpx.get(f"{API_BASE}/api/cameras/", timeout=DEFAULT_TIMEOUT)
         if response.status_code != 200:
             return f"Error fetching cameras: {response.status_code}"
         
@@ -102,7 +103,7 @@ def get_cluster_nodes() -> str:
     Shows node names, IPs, ready status, and architecture.
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/nodes/", timeout=10)
+        response = httpx.get(f"{API_BASE}/api/nodes/", timeout=DEFAULT_TIMEOUT)
         if response.status_code != 200:
             return f"Error fetching nodes: {response.status_code}"
         
@@ -136,15 +137,15 @@ def get_system_status() -> str:
     """
     try:
         # Check API health
-        health_response = httpx.get(f"{API_BASE}/health", timeout=5)
+        health_response = httpx.get(f"{API_BASE}/health", timeout=DEFAULT_TIMEOUT)
         api_healthy = health_response.status_code == 200
         
         # Get cameras
-        cameras_response = httpx.get(f"{API_BASE}/api/cameras/", timeout=10)
+        cameras_response = httpx.get(f"{API_BASE}/api/cameras/", timeout=DEFAULT_TIMEOUT)
         cameras = cameras_response.json().get("cameras", []) if cameras_response.status_code == 200 else []
         
         # Get nodes
-        nodes_response = httpx.get(f"{API_BASE}/api/nodes/", timeout=10)
+        nodes_response = httpx.get(f"{API_BASE}/api/nodes/", timeout=DEFAULT_TIMEOUT)
         nodes = nodes_response.json() if nodes_response.status_code == 200 else []
         
         # Calculate stats
@@ -178,7 +179,7 @@ def get_settings() -> str:
     Shows default resolution, framerate, cleanup interval, and node IPs.
     """
     try:
-        response = httpx.get(f"{API_BASE}/api/settings/", timeout=10)
+        response = httpx.get(f"{API_BASE}/api/settings/", timeout=DEFAULT_TIMEOUT)
         if response.status_code != 200:
             return f"Error fetching settings: {response.status_code}"
         
