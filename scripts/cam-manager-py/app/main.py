@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import init_db, close_db
-from app.routes import cameras, nodes, settings
+from app.routes import cameras, nodes
+from app.routes import settings as settings_routes
 from app.models.schemas import HealthResponse
 
 settings = get_settings()
@@ -75,7 +76,7 @@ async def health_check():
 # Include routers
 app.include_router(cameras.router)
 app.include_router(nodes.router)
-app.include_router(settings.router)
+app.include_router(settings_routes.router)
 
 
 # Exception handlers
