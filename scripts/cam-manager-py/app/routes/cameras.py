@@ -432,6 +432,12 @@ async def restart_camera(
             camera.service_name or "",
         )
     
+    # Delete existing recorder too
+    try:
+        await k8s.delete_recorder_deployment(str(camera_id))
+    except Exception:
+        pass
+    
     # Recreate deployment
     try:
         k8s_result = await k8s.create_camera_deployment(camera)
@@ -443,6 +449,13 @@ async def restart_camera(
         camera.status = CameraStatus.RUNNING.value
         
         await db.commit()
+        
+        # Also create recorder deployment
+        if camera.stream_port:
+            try:
+                await k8s.create_recorder_deployment(camera, camera.stream_port)
+            except Exception as e:
+                print(f"Failed to create recorder: {e}")
         
         return MessageResponse(
             message="Camera restarted",
