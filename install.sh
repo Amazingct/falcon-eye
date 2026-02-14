@@ -395,7 +395,7 @@ metadata:
   name: falcon-eye-role
 rules:
 - apiGroups: [""]
-  resources: ["pods", "services", "configmaps"]
+  resources: ["pods", "services", "configmaps", "secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["apps"]
   resources: ["deployments"]
