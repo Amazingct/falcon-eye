@@ -1,5 +1,5 @@
 """Recording model for video recordings"""
-from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, Enum as SQLEnum, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -23,7 +23,8 @@ class Recording(Base):
     __tablename__ = "recordings"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    camera_id = Column(UUID(as_uuid=True), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    camera_id = Column(UUID(as_uuid=True), ForeignKey("cameras.id", ondelete="SET NULL"), nullable=True, index=True)
+    camera_name = Column(String, nullable=True)  # Preserved camera name (for when camera is deleted)
     file_path = Column(String, nullable=False)  # Path to video file
     file_name = Column(String, nullable=False)  # Just the filename
     start_time = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -32,14 +33,16 @@ class Recording(Base):
     file_size_bytes = Column(Integer, nullable=True)  # File size
     status = Column(SQLEnum(RecordingStatus), default=RecordingStatus.RECORDING)
     error_message = Column(String, nullable=True)
+    camera_deleted = Column(Boolean, default=False, nullable=False)  # True if associated camera was deleted
     
-    # Relationship to camera
+    # Relationship to camera (nullable - camera may be deleted)
     camera = relationship("Camera", back_populates="recordings")
 
     def to_dict(self):
         return {
             "id": self.id,
             "camera_id": str(self.camera_id) if self.camera_id else None,
+            "camera_name": self.camera_name,
             "file_path": self.file_path,
             "file_name": self.file_name,
             "start_time": self.start_time.isoformat() if self.start_time else None,
@@ -48,4 +51,5 @@ class Recording(Base):
             "file_size_bytes": self.file_size_bytes,
             "status": self.status.value if self.status else None,
             "error_message": self.error_message,
+            "camera_deleted": self.camera_deleted,
         }

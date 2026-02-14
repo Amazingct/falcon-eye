@@ -70,6 +70,7 @@ async def notify_api_start(recording_id: str, file_path: str, file_name: str, st
             await client.post(f"{API_URL}/api/recordings/", json={
                 "id": recording_id,
                 "camera_id": CAMERA_ID,
+                "camera_name": CAMERA_NAME,  # Preserve camera name for when camera is deleted
                 "file_path": file_path,
                 "file_name": file_name,
                 "start_time": start_time.isoformat(),

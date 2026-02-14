@@ -337,12 +337,14 @@ async def update_camera(
 
 async def _background_delete_camera(
     camera_id: UUID,
+    camera_name: str,
     deployment_name: str,
     service_name: str,
     device_key: str,
     is_usb: bool,
 ):
     """Background task to delete camera with grace period"""
+    from app.models.recording import Recording, RecordingStatus
     import time
     
     try:
@@ -363,7 +365,29 @@ async def _background_delete_camera(
         if is_usb:
             await asyncio.sleep(15)
         
-        # Delete from database (cascades to recordings)
+        # Mark recordings as orphaned (preserve them, don't delete)
+        async with get_db_session() as db:
+            # Stop any active recordings and mark all as camera_deleted
+            await db.execute(
+                update(Recording)
+                .where(Recording.camera_id == camera_id)
+                .values(
+                    camera_deleted=True,
+                    camera_name=camera_name,
+                    # Stop active recordings
+                    status=RecordingStatus.STOPPED,
+                )
+            )
+            # Only update status for active recordings
+            await db.execute(
+                update(Recording)
+                .where(Recording.camera_id == camera_id)
+                .where(Recording.status == RecordingStatus.RECORDING)
+                .values(status=RecordingStatus.STOPPED)
+            )
+            await db.commit()
+        
+        # Delete camera from database (recordings preserved with camera_id=NULL due to SET NULL)
         async with get_db_session() as db:
             await db.execute(delete(Camera).where(Camera.id == camera_id))
             await db.commit()
@@ -405,6 +429,7 @@ async def delete_camera(
     background_tasks.add_task(
         _background_delete_camera,
         camera_id,
+        camera.name or f"Camera {str(camera_id)[:8]}",
         camera.deployment_name or "",
         camera.service_name or "",
         device_key,

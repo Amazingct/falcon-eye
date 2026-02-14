@@ -362,21 +362,33 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
     return () => clearInterval(interval)
   }, [cameras])
   
-  const toggleRecording = async (camera) => {
-    const isRecording = recordingStatus[camera.id]?.status === 'recording'
-    const action = isRecording ? 'stop' : 'start'
+  const startRecording = async (camera) => {
     try {
-      const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/${action}`, { method: 'POST' })
+      const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/start`, { method: 'POST' })
       const data = await res.json()
       if (res.ok) {
         setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
       } else {
-        // Show error to user
-        const errorMsg = data.detail || data.message || `Failed to ${action} recording`
+        const errorMsg = data.detail || data.message || 'Failed to start recording'
         onError(errorMsg)
       }
     } catch (e) {
-      onError(`Failed to ${action} recording: ${e.message}`)
+      onError(`Failed to start recording: ${e.message}`)
+    }
+  }
+  
+  const stopRecording = async (camera) => {
+    try {
+      const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/stop`, { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
+      } else {
+        const errorMsg = data.detail || data.message || 'Failed to stop recording'
+        onError(errorMsg)
+      }
+    } catch (e) {
+      onError(`Failed to stop recording: ${e.message}`)
     }
   }
   
@@ -496,21 +508,25 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
                 >
                   <Edit className="h-4 w-4" />
                 </button>
-                {/* Recording button - only for running cameras */}
+                {/* Recording buttons - only for running cameras */}
                 {camera.status === 'running' && (
-                  <button
-                    onClick={() => toggleRecording(camera)}
-                    className={`p-2 rounded transition ${
-                      recordingStatus[camera.id]?.status === 'recording'
-                        ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-                        : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
-                    }`}
-                    title={recordingStatus[camera.id]?.status === 'recording' ? 'Stop Recording' : 'Start Recording'}
-                  >
-                    {recordingStatus[camera.id]?.status === 'recording' 
-                      ? <Square className="h-4 w-4" /> 
-                      : <Circle className="h-4 w-4" />}
-                  </button>
+                  recordingStatus[camera.id]?.status === 'recording' ? (
+                    <button
+                      onClick={() => stopRecording(camera)}
+                      className="p-2 rounded transition bg-red-500 hover:bg-red-600 text-white animate-pulse"
+                      title="Stop Recording"
+                    >
+                      <Square className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => startRecording(camera)}
+                      className="p-2 rounded transition bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-red-400"
+                      title="Start Recording"
+                    >
+                      <Circle className="h-4 w-4" />
+                    </button>
+                  )
                 )}
               </div>
               <button
@@ -1810,20 +1826,35 @@ function RecordingsPage({ cameras }) {
     return () => clearInterval(interval)
   }, [])
 
-  // Group recordings by camera
+  // Group recordings by camera (or by camera_name for orphaned recordings)
   const groupedRecordings = recordings.reduce((acc, rec) => {
-    const camId = rec.camera_id
-    if (!acc[camId]) {
-      acc[camId] = []
+    // Use camera_id if available, otherwise use camera_name as key
+    const key = rec.camera_id || `deleted_${rec.camera_name || rec.id}`
+    if (!acc[key]) {
+      acc[key] = []
     }
-    acc[camId].push(rec)
+    acc[key].push(rec)
     return acc
   }, {})
 
-  // Get camera name by ID
-  const getCameraName = (camId) => {
+  // Get camera name by ID or from recording
+  const getCameraInfo = (camId, recs) => {
+    // Check if any recording in group is from a deleted camera
+    const firstRec = recs[0]
+    const isDeleted = firstRec?.camera_deleted || !firstRec?.camera_id
+    
+    if (isDeleted) {
+      return {
+        name: firstRec?.camera_name || 'Unknown Camera',
+        deleted: true
+      }
+    }
+    
     const cam = cameras.find(c => c.id === camId)
-    return cam?.name || `Camera ${camId.slice(0, 8)}`
+    return {
+      name: cam?.name || firstRec?.camera_name || `Camera ${camId?.slice(0, 8) || 'unknown'}`,
+      deleted: false
+    }
   }
 
   // Toggle camera expansion
@@ -1910,8 +1941,10 @@ function RecordingsPage({ cameras }) {
         </div>
       ) : (
         <div className="space-y-4">
-          {Object.entries(groupedRecordings).map(([camId, recs]) => (
-            <div key={camId} className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+          {Object.entries(groupedRecordings).map(([camId, recs]) => {
+            const cameraInfo = getCameraInfo(camId, recs)
+            return (
+            <div key={camId} className={`bg-gray-800 rounded-lg border overflow-hidden ${cameraInfo.deleted ? 'border-yellow-700/50' : 'border-gray-700'}`}>
               {/* Camera Header */}
               <button
                 onClick={() => toggleCamera(camId)}
@@ -1922,9 +1955,12 @@ function RecordingsPage({ cameras }) {
                     <ChevronDown className="h-5 w-5 text-gray-400" /> : 
                     <ChevronRight className="h-5 w-5 text-gray-400" />
                   }
-                  <Camera className="h-5 w-5 text-blue-500" />
-                  <span className="font-medium">{getCameraName(camId)}</span>
-                  <span className="text-sm text-gray-400">({recs.length} recordings)</span>
+                  <Camera className={`h-5 w-5 ${cameraInfo.deleted ? 'text-yellow-500' : 'text-blue-500'}`} />
+                  <span className="font-medium">{cameraInfo.name}</span>
+                  {cameraInfo.deleted && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">Camera Deleted</span>
+                  )}
+                  <span className="text-sm text-gray-400">({recs.length} recording{recs.length !== 1 ? 's' : ''})</span>
                 </div>
                 {recs.some(r => r.status === 'recording') && (
                   <span className="flex items-center space-x-1 text-red-500 text-sm">
@@ -2011,7 +2047,7 @@ function RecordingsPage({ cameras }) {
                 </div>
               )}
             </div>
-          ))}
+          )})}
         </div>
       )}
 

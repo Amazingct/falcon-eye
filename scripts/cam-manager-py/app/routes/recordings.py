@@ -19,6 +19,7 @@ class RecordingCreate(BaseModel):
     """Create recording request (from recorder service)"""
     id: str
     camera_id: str
+    camera_name: Optional[str] = None  # Preserved for when camera is deleted
     file_path: str
     file_name: str
     start_time: str
@@ -36,7 +37,8 @@ class RecordingUpdate(BaseModel):
 class RecordingResponse(BaseModel):
     """Recording response"""
     id: str
-    camera_id: str
+    camera_id: Optional[str] = None  # Null if camera was deleted
+    camera_name: Optional[str] = None  # Preserved camera name
     file_path: str
     file_name: str
     start_time: str
@@ -45,6 +47,7 @@ class RecordingResponse(BaseModel):
     file_size_bytes: Optional[int] = None
     status: str
     error_message: Optional[str] = None
+    camera_deleted: bool = False  # True if associated camera was deleted
     
     class Config:
         from_attributes = True
@@ -112,6 +115,7 @@ async def create_recording(
     recording = Recording(
         id=data.id,
         camera_id=camera_uuid,
+        camera_name=data.camera_name,  # Preserve camera name for when camera is deleted
         file_path=data.file_path,
         file_name=data.file_name,
         start_time=datetime.fromisoformat(data.start_time),
