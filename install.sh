@@ -327,6 +327,9 @@ spec:
         envFrom:
         - configMapRef:
             name: falcon-eye-config
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
         resources:
           requests:
             memory: "128Mi"
@@ -334,6 +337,11 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+      volumes:
+      - name: recordings
+        hostPath:
+          path: /data/falcon-eye/recordings
+          type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service
