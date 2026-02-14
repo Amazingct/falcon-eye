@@ -106,8 +106,13 @@ def get_enabled_tools_from_config() -> list:
 async def stream_chat(
     messages: list[dict],
     tools: list = None,
-) -> AsyncGenerator[str, None]:
-    """Stream chat responses from Claude with tool support - token by token"""
+) -> AsyncGenerator[tuple[str, str], None]:
+    """
+    Stream chat responses from Claude with tool support.
+    Yields tuples of (event_type, data):
+      - ("text", "token") - text content to display
+      - ("thinking", "") - tools are being executed (show loading)
+    """
     llm = get_llm(streaming=True)
     
     # Load tools from config if not provided
@@ -148,17 +153,12 @@ async def stream_chat(
     # Stream the response - collect chunks to check for tool calls
     collected_text = []
     tool_calls = []
+    has_tool_calls = False
     
     async for chunk in llm.astream(lc_messages):
-        # Stream text content immediately (token by token)
-        if hasattr(chunk, "content") and chunk.content:
-            text = extract_text(chunk.content)
-            if text:
-                collected_text.append(text)
-                yield text
-        
         # Collect tool calls (they come in the stream too)
         if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+            has_tool_calls = True
             for tc in chunk.tool_call_chunks:
                 # Build up tool calls from chunks
                 if tc.get("index") is not None:
@@ -171,9 +171,21 @@ async def stream_chat(
                         tool_calls[idx]["args"] += tc["args"]
                     if tc.get("id"):
                         tool_calls[idx]["id"] = tc["id"]
+        
+        # Collect text (but don't stream if we're going to use tools)
+        if hasattr(chunk, "content") and chunk.content:
+            text = extract_text(chunk.content)
+            if text:
+                collected_text.append(text)
+                # Only stream immediately if no tool calls detected yet
+                if not has_tool_calls:
+                    yield ("text", text)
     
     # If there were tool calls, execute them and stream the follow-up
     if tool_calls and any(tc["name"] for tc in tool_calls):
+        # Emit thinking event so UI shows loading
+        yield ("thinking", "")
+        
         tool_results = []
         tools_by_name = {t.name: t for t in tools} if tools else {}
         
@@ -229,4 +241,4 @@ async def stream_chat(
             if hasattr(chunk, "content") and chunk.content:
                 text = extract_text(chunk.content)
                 if text:
-                    yield text
+                    yield ("text", text)

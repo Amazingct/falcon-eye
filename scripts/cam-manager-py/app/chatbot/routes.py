@@ -63,11 +63,17 @@ async def chat(request: ChatRequest):
 async def stream_response(messages: list[dict]):
     """Generator for SSE streaming"""
     try:
-        async for chunk in stream_chat(messages):
-            yield {
-                "event": "message",
-                "data": json.dumps({"content": chunk})
-            }
+        async for event_type, data in stream_chat(messages):
+            if event_type == "text":
+                yield {
+                    "event": "message",
+                    "data": json.dumps({"content": data})
+                }
+            elif event_type == "thinking":
+                yield {
+                    "event": "thinking",
+                    "data": json.dumps({"status": "using_tools"})
+                }
         
         # Send done event
         yield {

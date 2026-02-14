@@ -1422,9 +1422,10 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let assistantContent = ''
+      let isThinking = false
       
       // Add placeholder for assistant message
-      setMessages([...newMessages, { role: 'assistant', content: '' }])
+      setMessages([...newMessages, { role: 'assistant', content: '', thinking: false }])
 
       while (true) {
         const { done, value } = await reader.read()
@@ -1433,17 +1434,36 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
         const chunk = decoder.decode(value)
         const lines = chunk.split('\n')
 
+        let currentEvent = 'message'
         for (const line of lines) {
+          // Parse event type
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+            continue
+          }
+          
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6))
-              // Handle content - can be string or array of content blocks
-              if (data.content) {
+              
+              // Handle thinking event (tools being used)
+              if (currentEvent === 'thinking') {
+                isThinking = true
+                setMessages(prev => {
+                  const updated = [...prev]
+                  updated[updated.length - 1] = { role: 'assistant', content: assistantContent, thinking: true }
+                  return updated
+                })
+                continue
+              }
+              
+              // Handle text content
+              if (currentEvent === 'message' && data.content) {
+                isThinking = false
                 let text = ''
                 if (typeof data.content === 'string') {
                   text = data.content
                 } else if (Array.isArray(data.content)) {
-                  // Extract text from content blocks [{text: "...", type: "text"}]
                   text = data.content
                     .filter(block => block.type === 'text')
                     .map(block => block.text)
@@ -1453,7 +1473,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
                   assistantContent += text
                   setMessages(prev => {
                     const updated = [...prev]
-                    updated[updated.length - 1] = { role: 'assistant', content: assistantContent }
+                    updated[updated.length - 1] = { role: 'assistant', content: assistantContent, thinking: false }
                     return updated
                   })
                 }
@@ -1546,17 +1566,19 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle }) {
                   : 'bg-gray-700 text-gray-100'
               }`}
             >
-              <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+              {msg.thinking ? (
+                <div className="flex items-center space-x-2 text-sm text-gray-400">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Getting info...</span>
+                </div>
+              ) : msg.content ? (
+                <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+              ) : msg.role === 'assistant' && isLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
             </div>
           </div>
         ))}
-        {isLoading && messages[messages.length - 1]?.role === 'user' && (
-          <div className="flex justify-start">
-            <div className="bg-gray-700 rounded-lg px-4 py-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-            </div>
-          </div>
-        )}
         <div ref={messagesEndRef} />
       </div>
 
