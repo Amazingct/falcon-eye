@@ -50,17 +50,17 @@ ENV PATH=/home/falcon/.local/bin:$PATH
 # Environment defaults
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PORT=3000 \
+    PORT=8000 \
     DB_HOST=postgres \
     DB_PORT=5432 \
-    DB_USER=admin \
-    DB_PASSWORD=changeme \
+    DB_USER=falcon \
+    DB_PASSWORD=falcon-eye-2026 \
     DB_NAME=falconeye \
     K8S_NAMESPACE=falcon-eye
 
-EXPOSE 3000
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

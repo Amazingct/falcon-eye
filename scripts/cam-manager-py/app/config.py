@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     app_name: str = "Falcon-Eye Camera Manager"
     debug: bool = False
     host: str = "0.0.0.0"
-    port: int = 3000
+    port: int = 8000
     
     # Database - prefer DATABASE_URL env var if set
     database_url_env: str | None = None  # Maps to DATABASE_URL
