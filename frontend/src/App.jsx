@@ -15,7 +15,7 @@ function App() {
   // Fetch cameras
   const fetchCameras = async () => {
     try {
-      const res = await fetch(`${API_URL}/cameras`)
+      const res = await fetch(`${API_URL}/cameras/`)
       if (!res.ok) throw new Error('Failed to fetch cameras')
       const data = await res.json()
       setCameras(data)
@@ -27,7 +27,7 @@ function App() {
   // Fetch nodes
   const fetchNodes = async () => {
     try {
-      const res = await fetch(`${API_URL}/nodes`)
+      const res = await fetch(`${API_URL}/nodes/`)
       if (!res.ok) throw new Error('Failed to fetch nodes')
       const data = await res.json()
       setNodes(data)
