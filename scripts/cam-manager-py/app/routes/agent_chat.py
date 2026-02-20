@@ -103,10 +103,19 @@ async def send_message(
     tools_schema = get_tools_for_agent(agent_tools) if agent_tools else []
 
     # Build agent context for tool handlers that need LLM creds (e.g. camera_analyze)
+    # Resolve API key: per-agent DB key > shared ConfigMap env key
+    import os
+    resolved_key = agent.api_key_ref or ""
+    if not resolved_key:
+        if agent.provider == "anthropic":
+            resolved_key = os.getenv("ANTHROPIC_API_KEY", "")
+        elif agent.provider == "openai":
+            resolved_key = os.getenv("OPENAI_API_KEY", "")
+
     agent_context = {
         "provider": agent.provider,
         "model": agent.model,
-        "api_key": agent.api_key_ref,
+        "api_key": resolved_key,
     }
 
     # Call LLM
@@ -179,12 +188,23 @@ async def create_session(agent_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 async def _call_llm(agent: Agent, messages: list[dict], tools: list[dict], max_iterations: int = 5, agent_context: dict = None) -> tuple[str, int, int]:
-    """Call the LLM provider with tool support"""
-    import httpx
+    """Call the LLM provider with tool support.
+
+    Key resolution order:
+    1. Per-agent key from DB (agent.api_key_ref)
+    2. Shared key from ConfigMap env (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+    """
+    import os
 
     provider = agent.provider
     model = agent.model
-    api_key = agent.api_key_ref  # Direct key for now
+
+    api_key = agent.api_key_ref or ""
+    if not api_key:
+        if provider == "anthropic":
+            api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        elif provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY", "")
 
     if provider == "anthropic":
         return await _call_anthropic(api_key, model, messages, tools, agent.max_tokens, agent.temperature, max_iterations, agent_context=agent_context)
@@ -253,11 +273,7 @@ async def _call_anthropic(api_key: str, model: str, messages: list, tools: list,
     import httpx
 
     if not api_key:
-        # Try env
-        import os
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise Exception("Anthropic API key not configured")
+        raise Exception("Anthropic API key not configured. Set it in the shared ConfigMap (ANTHROPIC_API_KEY) or per-agent in the dashboard.")
 
     headers = {
         "Content-Type": "application/json",

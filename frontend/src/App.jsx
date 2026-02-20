@@ -1355,6 +1355,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
           creating_timeout_minutes: data.creating_timeout_minutes,
           chatbot_tools: data.chatbot?.enabled_tools || [],
           anthropic_api_key: '',
+          openai_api_key: '',
         })
       } catch (err) {
         setError(err.message)
@@ -1379,8 +1380,10 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
       if (!res.ok) throw new Error('Failed to save settings')
       const data = await res.json()
       setSettings(data)
-      setMessage((payload.anthropic_api_key) ? 'API key saved! Click "Restart All" in Nodes & Cluster to apply.' : 'Settings saved successfully.')
+      const keySaved = payload.anthropic_api_key || payload.openai_api_key
+      setMessage(keySaved ? 'API key saved — pods restarting to apply.' : 'Settings saved — pods restarting to apply.')
       if (payload.anthropic_api_key) setForm(f => ({ ...f, anthropic_api_key: '' }))
+      if (payload.openai_api_key) setForm(f => ({ ...f, openai_api_key: '' }))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1766,48 +1769,81 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                 <div className="space-y-8">
                   <div>
                     <h2 className="text-2xl font-bold">Agents</h2>
-                    <p className="text-gray-400 mt-1">Manage AI agents and global API configuration</p>
+                    <p className="text-gray-400 mt-1">Manage AI agents and shared LLM API keys</p>
                   </div>
 
-                  {/* Global API Key */}
-                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-5">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Global Anthropic API Key</h3>
-                      {settings?.chatbot?.api_key_configured ? (
-                        <span className="flex items-center space-x-1.5 text-xs bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full border border-green-500/30">
-                          <CheckCircle className="h-3 w-3" />
-                          <span>Configured</span>
-                        </span>
-                      ) : (
-                        <span className="flex items-center space-x-1.5 text-xs bg-yellow-500/15 text-yellow-400 px-2.5 py-1 rounded-full border border-yellow-500/30">
-                          <AlertCircle className="h-3 w-3" />
-                          <span>Not Configured</span>
-                        </span>
-                      )}
+                  {/* Shared LLM API Keys */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
+                    <div>
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Shared LLM API Keys</h3>
+                      <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                        Stored in the shared ConfigMap. All pods pick up these keys automatically.
+                        Per-agent overrides can be set in each agent's own settings.
+                      </p>
                     </div>
 
-                    <p className="text-xs text-gray-500 leading-relaxed">
-                      Set during install. All agents use this key by default unless overridden with a per-agent key.
-                    </p>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Update API Key</label>
+                    {/* Anthropic */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-gray-300">Anthropic API Key</label>
+                        {settings?.chatbot?.api_key_configured ? (
+                          <span className="flex items-center space-x-1.5 text-xs bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full border border-green-500/30">
+                            <CheckCircle className="h-3 w-3" />
+                            <span>Configured</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center space-x-1.5 text-xs bg-yellow-500/15 text-yellow-400 px-2.5 py-1 rounded-full border border-yellow-500/30">
+                            <AlertCircle className="h-3 w-3" />
+                            <span>Not Set</span>
+                          </span>
+                        )}
+                      </div>
                       <input
                         type="password"
                         value={form.anthropic_api_key || ''}
                         onChange={e => setForm({ ...form, anthropic_api_key: e.target.value })}
-                        placeholder={settings?.chatbot?.api_key_configured ? '••••••••••••••••  (leave blank to keep current)' : 'sk-ant-api03-…'}
+                        placeholder={settings?.chatbot?.api_key_configured ? '••••••••  (leave blank to keep current)' : 'sk-ant-api03-…'}
+                        className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 font-mono text-sm"
+                      />
+                    </div>
+
+                    {/* OpenAI */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-gray-300">OpenAI API Key</label>
+                        {settings?.chatbot?.openai_key_configured ? (
+                          <span className="flex items-center space-x-1.5 text-xs bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full border border-green-500/30">
+                            <CheckCircle className="h-3 w-3" />
+                            <span>Configured</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center space-x-1.5 text-xs bg-yellow-500/15 text-yellow-400 px-2.5 py-1 rounded-full border border-yellow-500/30">
+                            <AlertCircle className="h-3 w-3" />
+                            <span>Not Set</span>
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        type="password"
+                        value={form.openai_api_key || ''}
+                        onChange={e => setForm({ ...form, openai_api_key: e.target.value })}
+                        placeholder={settings?.chatbot?.openai_key_configured ? '••••••••  (leave blank to keep current)' : 'sk-proj-…'}
                         className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 font-mono text-sm"
                       />
                     </div>
 
                     <button
-                      onClick={() => saveSettings({ anthropic_api_key: form.anthropic_api_key })}
-                      disabled={saving || !form.anthropic_api_key}
+                      onClick={() => {
+                        const payload = {}
+                        if (form.anthropic_api_key) payload.anthropic_api_key = form.anthropic_api_key
+                        if (form.openai_api_key) payload.openai_api_key = form.openai_api_key
+                        if (Object.keys(payload).length) saveSettings(payload)
+                      }}
+                      disabled={saving || (!form.anthropic_api_key && !form.openai_api_key)}
                       className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/40 disabled:cursor-not-allowed px-6 py-2.5 rounded-lg transition font-medium text-sm"
                     >
                       {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Key className="h-4 w-4" />}
-                      <span>{saving ? 'Saving…' : 'Save API Key'}</span>
+                      <span>{saving ? 'Validating & saving…' : 'Save API Keys'}</span>
                     </button>
                   </div>
 

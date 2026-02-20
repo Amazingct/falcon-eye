@@ -562,10 +562,13 @@ async def create_agent_deployment(agent) -> dict:
         {"name": "CHANNEL_TYPE", "value": agent.channel_type or ""},
         {"name": "LLM_PROVIDER", "value": agent.provider},
         {"name": "LLM_MODEL", "value": agent.model},
-        {"name": "LLM_API_KEY", "value": agent.api_key_ref or ""},
         {"name": "LLM_BASE_URL", "value": ""},
         {"name": "SYSTEM_PROMPT", "value": agent.system_prompt or ""},
     ]
+
+    # Only set per-agent LLM_API_KEY if the agent has its own override
+    if agent.api_key_ref:
+        env_vars.append({"name": "LLM_API_KEY", "value": agent.api_key_ref})
 
     # Add channel-specific env vars
     channel_config = agent.channel_config or {}
@@ -603,6 +606,7 @@ async def create_agent_deployment(agent) -> dict:
                         "image": "ghcr.io/amazingct/falcon-eye-agent:latest",
                         "imagePullPolicy": "IfNotPresent",
                         "ports": [{"containerPort": 8080, "name": "health"}],
+                        "envFrom": [{"configMapRef": {"name": "falcon-eye-config"}}],
                         "env": env_vars,
                         "resources": {
                             "requests": {"memory": "64Mi", "cpu": "50m"},

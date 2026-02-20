@@ -499,15 +499,24 @@ select_node() {
 
 # Prompt for optional configuration
 configure_options() {
-    # Non-interactive or upgrade: let Kubernetes scheduler decide placement
+    # Preserve existing API keys from ConfigMap on upgrade
+    if kubectl get configmap falcon-eye-config -n ${NAMESPACE} &>/dev/null; then
+        EXISTING_ANTHROPIC_KEY=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.ANTHROPIC_API_KEY}' 2>/dev/null || echo "")
+        EXISTING_OPENAI_KEY=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.OPENAI_API_KEY}' 2>/dev/null || echo "")
+    fi
+
+    # Non-interactive or upgrade: keep existing config, skip prompts
     if [ ! -t 0 ] || [ "$IS_UPGRADE" = true ]; then
         POSTGRES_NODE=""
         API_NODE=""
         DASHBOARD_NODE=""
         CAMERA_NODE=""
         RECORDER_NODE=""
-        ANTHROPIC_API_KEY=""
+        ANTHROPIC_API_KEY="${EXISTING_ANTHROPIC_KEY:-}"
+        OPENAI_API_KEY="${EXISTING_OPENAI_KEY:-}"
         echo -e "${GREEN}  Auto-configured: Kubernetes scheduler will place all components${NC}"
+        [ -n "$ANTHROPIC_API_KEY" ] && echo -e "${GREEN}  ✓ Anthropic API key preserved from existing config${NC}"
+        [ -n "$OPENAI_API_KEY" ] && echo -e "${GREEN}  ✓ OpenAI API key preserved from existing config${NC}"
         return
     fi
     
@@ -562,18 +571,35 @@ configure_options() {
         echo ""
     fi
     
-    # Anthropic API key
-    echo -e "  ${CYAN}AI Chatbot Configuration:${NC}"
-    echo -e "  The AI chatbot requires an Anthropic API key."
-    echo -e "  Get one at: ${CYAN}https://console.anthropic.com/settings/keys${NC}"
+    # LLM API Keys (shared across all agents)
+    echo -e "  ${CYAN}LLM API Keys (shared across all pods):${NC}"
+    echo -e "  These keys are stored in a shared ConfigMap and used by all agents."
     echo ""
-    read -p "  Enter Anthropic API key (or press Enter to skip): " ANTHROPIC_API_KEY
-    
-    if [ -n "$ANTHROPIC_API_KEY" ]; then
-        echo -e "${GREEN}  ✓ API key configured - chatbot enabled${NC}"
+
+    # Anthropic
+    if [ -n "${EXISTING_ANTHROPIC_KEY:-}" ]; then
+        MASKED_KEY="${EXISTING_ANTHROPIC_KEY:0:8}...${EXISTING_ANTHROPIC_KEY: -4}"
+        echo -e "  Anthropic API key: ${GREEN}${MASKED_KEY}${NC} (already configured)"
+        read -p "  Press Enter to keep, or paste a new key to replace: " NEW_KEY
+        ANTHROPIC_API_KEY="${NEW_KEY:-$EXISTING_ANTHROPIC_KEY}"
     else
-        echo -e "${YELLOW}  ⚠ Skipped - chatbot will be disabled${NC}"
+        echo -e "  Get an Anthropic key at: ${CYAN}https://console.anthropic.com/settings/keys${NC}"
+        read -p "  Enter Anthropic API key (or press Enter to skip): " ANTHROPIC_API_KEY
     fi
+    [ -n "$ANTHROPIC_API_KEY" ] && echo -e "${GREEN}  ✓ Anthropic key configured${NC}" || echo -e "${YELLOW}  ⚠ Skipped${NC}"
+    echo ""
+
+    # OpenAI
+    if [ -n "${EXISTING_OPENAI_KEY:-}" ]; then
+        MASKED_KEY="${EXISTING_OPENAI_KEY:0:8}...${EXISTING_OPENAI_KEY: -4}"
+        echo -e "  OpenAI API key: ${GREEN}${MASKED_KEY}${NC} (already configured)"
+        read -p "  Press Enter to keep, or paste a new key to replace: " NEW_KEY
+        OPENAI_API_KEY="${NEW_KEY:-$EXISTING_OPENAI_KEY}"
+    else
+        echo -e "  Get an OpenAI key at: ${CYAN}https://platform.openai.com/api-keys${NC}"
+        read -p "  Enter OpenAI API key (or press Enter to skip): " OPENAI_API_KEY
+    fi
+    [ -n "${OPENAI_API_KEY:-}" ] && echo -e "${GREEN}  ✓ OpenAI key configured${NC}" || echo -e "${YELLOW}  ⚠ Skipped${NC}"
     echo ""
 }
 
@@ -687,6 +713,7 @@ data:
   DEFAULT_RESOLUTION: "640x480"
   DEFAULT_FRAMERATE: "15"
   ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+  OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
   DEFAULT_CAMERA_NODE: "${CAMERA_NODE:-}"
   DEFAULT_RECORDER_NODE: "${RECORDER_NODE:-}"
 ---
@@ -711,6 +738,15 @@ spec:
       serviceAccountName: falcon-eye-sa
 $([ -n "$API_NODE" ] && echo "      nodeSelector:
         kubernetes.io/hostname: ${API_NODE}")
+      initContainers:
+      - name: fix-permissions
+        image: busybox:latest
+        command: ["sh", "-c", "chown -R 1001:1001 /recordings /agent-files"]
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
+        - name: agent-files
+          mountPath: /agent-files
       containers:
       - name: api
         image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
