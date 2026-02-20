@@ -100,13 +100,9 @@ def generate_deployment(camera: Camera) -> tuple[dict, str]:
             "kubernetes.io/hostname": camera_node,
         }
         
-        if settings.is_jetson_node(camera_node):
-            deployment["spec"]["template"]["spec"]["tolerations"] = [{
-                "key": "dedicated",
-                "operator": "Equal",
-                "value": "jetson",
-                "effect": "NoSchedule",
-            }]
+        tolerations = settings.get_node_tolerations(camera_node)
+        if tolerations:
+            deployment["spec"]["template"]["spec"]["tolerations"] = tolerations
     
     return deployment, deployment_name
 
@@ -192,13 +188,10 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
         deployment["spec"]["template"]["spec"]["nodeSelector"] = {
             "kubernetes.io/hostname": recorder_node,
         }
-        # Add toleration for Jetson nodes
-        if settings.is_jetson_node(recorder_node):
-            deployment["spec"]["template"]["spec"]["tolerations"] = [{
-                "key": "dedicated",
-                "value": "jetson",
-                "effect": "NoSchedule",
-            }]
+        # Auto-detect tolerations from node taints
+        tolerations = settings.get_node_tolerations(recorder_node)
+        if tolerations:
+            deployment["spec"]["template"]["spec"]["tolerations"] = tolerations
     
     return deployment, deployment_name
 

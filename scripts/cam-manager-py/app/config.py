@@ -66,15 +66,16 @@ class Settings(BaseSettings):
     # Jetson/special nodes that need tolerations (comma-separated via env)
     jetson_nodes: list[str] = []
     
-    # --- Auto-discovered node IP cache ---
+    # --- Auto-discovered node cache ---
     _node_ip_cache: dict[str, str] = {}
-    _node_ip_cache_time: float = 0
-    _NODE_IP_CACHE_TTL: float = 300  # Refresh every 5 minutes
+    _node_taint_cache: dict[str, list[dict]] = {}  # node_name -> list of taints
+    _node_cache_time: float = 0
+    _NODE_CACHE_TTL: float = 300  # Refresh every 5 minutes
     
-    def _refresh_node_ips(self) -> None:
-        """Auto-discover node IPs from Kubernetes API"""
+    def _refresh_node_cache(self) -> None:
+        """Auto-discover node IPs and taints from Kubernetes API"""
         now = time.time()
-        if self._node_ip_cache and (now - self._node_ip_cache_time) < self._NODE_IP_CACHE_TTL:
+        if self._node_ip_cache and (now - self._node_cache_time) < self._NODE_CACHE_TTL:
             return  # Cache still valid
         
         try:
@@ -86,25 +87,36 @@ class Settings(BaseSettings):
             
             v1 = client.CoreV1Api()
             nodes = v1.list_node()
-            new_cache = {}
+            new_ip_cache = {}
+            new_taint_cache = {}
             for node in nodes.items:
                 name = node.metadata.name
                 for addr in node.status.addresses:
                     if addr.type == "InternalIP":
-                        new_cache[name] = addr.address
+                        new_ip_cache[name] = addr.address
                         break
+                # Cache taints for toleration auto-detection
+                if node.spec.taints:
+                    new_taint_cache[name] = [
+                        {"key": t.key, "value": t.value, "effect": t.effect}
+                        for t in node.spec.taints
+                        if t.key not in ("node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable")
+                    ]
             
-            if new_cache:
-                self._node_ip_cache = new_cache
-                self._node_ip_cache_time = now
-                logger.info(f"Auto-discovered node IPs: {new_cache}")
+            if new_ip_cache:
+                self._node_ip_cache = new_ip_cache
+                self._node_taint_cache = new_taint_cache
+                self._node_cache_time = now
+                logger.info(f"Auto-discovered node IPs: {new_ip_cache}")
+                if new_taint_cache:
+                    logger.info(f"Auto-discovered node taints: {new_taint_cache}")
         except Exception as e:
-            logger.warning(f"Failed to auto-discover node IPs: {e}")
+            logger.warning(f"Failed to auto-discover nodes: {e}")
             # Keep stale cache if available
     
     def get_node_ip(self, node_name: str) -> str:
         """Get IP address for a node (auto-discovered from K8s API)"""
-        self._refresh_node_ips()
+        self._refresh_node_cache()
         
         if node_name in self._node_ip_cache:
             return self._node_ip_cache[node_name]
@@ -121,12 +133,32 @@ class Settings(BaseSettings):
     @property
     def node_ips(self) -> dict[str, str]:
         """Get all discovered node name → IP mappings"""
-        self._refresh_node_ips()
+        self._refresh_node_cache()
         return dict(self._node_ip_cache)
     
+    def get_node_tolerations(self, node_name: str) -> list[dict]:
+        """Get tolerations needed for scheduling on a specific node.
+        Auto-detected from K8s node taints — no hardcoded node lists needed."""
+        self._refresh_node_cache()
+        taints = self._node_taint_cache.get(node_name, [])
+        return [
+            {
+                "key": t["key"],
+                "operator": "Equal",
+                "value": t.get("value", ""),
+                "effect": t["effect"],
+            }
+            for t in taints
+        ]
+    
     def is_jetson_node(self, node_name: str) -> bool:
-        """Check if node requires special tolerations (Jetson, GPU, etc.)"""
-        return node_name in self.jetson_nodes
+        """Check if node requires special tolerations (Jetson, GPU, etc.).
+        Auto-detected from node taints, or overridden via JETSON_NODES env."""
+        if self.jetson_nodes:
+            return node_name in self.jetson_nodes
+        # Auto-detect: check if node has any taints
+        self._refresh_node_cache()
+        return node_name in self._node_taint_cache
     
     class Config:
         env_file = ".env"
