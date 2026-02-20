@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight, Key, Server, Bot, ArrowLeft, AlertTriangle, Network } from 'lucide-react'
+import AgentsPage from './components/AgentsPage'
+import CronJobsPage from './components/CronJobsPage'
+import AgentChat from './components/AgentChat'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -124,6 +127,20 @@ function App() {
                 >
                   <Film className="h-4 w-4" />
                   <span>Recordings</span>
+                </button>
+                <button
+                  onClick={() => setCurrentPage('agents')}
+                  className={`px-3 py-1 rounded flex items-center space-x-1 text-sm ${currentPage === 'agents' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                >
+                  <Bot className="h-4 w-4" />
+                  <span>Agents</span>
+                </button>
+                <button
+                  onClick={() => setCurrentPage('cron')}
+                  className={`px-3 py-1 rounded flex items-center space-x-1 text-sm ${currentPage === 'cron' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                >
+                  <Clock className="h-4 w-4" />
+                  <span>Cron</span>
                 </button>
               </div>
             </div>
@@ -267,6 +284,12 @@ function App() {
                   onError={setError}
                 />
               )
+            ) : currentPage === 'agents' ? (
+              <AgentsPage />
+            ) : currentPage === 'cron' ? (
+              <CronJobsPage />
+            ) : currentPage === 'chat' ? (
+              <AgentChat />
             ) : (
               <RecordingsPage cameras={cameras} />
             )}

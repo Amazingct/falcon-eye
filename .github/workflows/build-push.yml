@@ -8,6 +8,8 @@ on:
       - 'scripts/recorder/**'
       - 'scripts/camera-usb/**'
       - 'scripts/camera-rtsp/**'
+      - 'scripts/agent/**'
+      - 'scripts/cron-runner/**'
       - 'frontend/**'
       - '.github/workflows/build-push.yml'
   pull_request:

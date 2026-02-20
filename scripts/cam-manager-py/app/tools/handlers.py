@@ -133,19 +133,41 @@ async def web_search(query: str, **kwargs) -> str:
     return f"Web search not yet implemented. Query was: {query}"
 
 
-async def spawn_agent(name: str, type: str, provider: str, model: str, system_prompt: str = None, tools: list = None, **kwargs) -> str:
-    """Create and start a new agent"""
+async def spawn_agent(name: str, system_prompt: str = None, tools: list = None, channel_type: str = None, **kwargs) -> str:
+    """Create and start a new agent. Automatically inherits the calling agent's
+    LLM config (provider, model, API key, temperature, max_tokens) so no manual
+    configuration is needed. Only name is required — everything else is optional overrides."""
     try:
+        # Get calling agent's config from context (injected by chat route)
+        agent_ctx = kwargs.get("_agent_context", {})
+        parent_agent_id = agent_ctx.get("agent_id")
+        
+        # Fetch parent agent's full config to inherit from
+        parent_config = {}
+        if parent_agent_id:
+            try:
+                parent_config = await _api_get(f"/api/agents/{parent_agent_id}")
+            except Exception:
+                pass
+        
         slug = re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")[:50]
         payload = {
             "name": name,
             "slug": slug,
             "type": "pod",
-            "provider": provider,
-            "model": model,
-            "channel_type": type,
+            # Inherit from parent agent
+            "provider": parent_config.get("provider", agent_ctx.get("provider", "openai")),
+            "model": parent_config.get("model", agent_ctx.get("model", "gpt-4o")),
+            "api_key_ref": parent_config.get("api_key_ref"),
+            "temperature": parent_config.get("temperature", 0.7),
+            "max_tokens": parent_config.get("max_tokens", 4096),
+            "cpu_limit": parent_config.get("cpu_limit", "500m"),
+            "memory_limit": parent_config.get("memory_limit", "512Mi"),
+            # Overridable fields
+            "channel_type": channel_type or parent_config.get("channel_type"),
+            "channel_config": parent_config.get("channel_config", {}),
             "system_prompt": system_prompt or f"You are {name}, a Falcon-Eye agent.",
-            "tools": tools or [],
+            "tools": tools if tools is not None else parent_config.get("tools", []),
         }
         result = await _api_post("/api/agents/", payload)
         agent_id = result.get("id")
@@ -153,7 +175,7 @@ async def spawn_agent(name: str, type: str, provider: str, model: str, system_pr
             return f"Failed to create agent: {json.dumps(result)}"
         # Start the agent
         start_result = await _api_post(f"/api/agents/{agent_id}/start")
-        return f"Agent '{name}' created (id: {agent_id}) and started. {start_result.get('message', '')}"
+        return f"Agent '{name}' created (id: {agent_id}) and started. Inherited config from parent agent. {start_result.get('message', '')}"
     except Exception as e:
         return f"Error spawning agent: {e}"
 

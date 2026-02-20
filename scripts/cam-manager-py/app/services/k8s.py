@@ -34,6 +34,7 @@ load_k8s_config()
 
 apps_api = client.AppsV1Api()
 core_api = client.CoreV1Api()
+batch_api = client.BatchV1Api()
 
 
 def generate_deployment(camera: Camera) -> tuple[dict, str]:
@@ -546,6 +547,313 @@ async def get_camera_pod_status(camera_id: str) -> str:
             
     except ApiException:
         return "error"
+
+
+async def create_agent_deployment(agent) -> dict:
+    """Create K8s Deployment + Service for an agent pod"""
+    import re
+    name_slug = re.sub(r"[^a-z0-9-]", "-", agent.slug.lower()).strip("-")[:40]
+    deployment_name = f"agent-{name_slug}"
+    service_name = f"svc-agent-{name_slug}"
+
+    env_vars = [
+        {"name": "AGENT_ID", "value": str(agent.id)},
+        {"name": "API_URL", "value": f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"},
+        {"name": "CHANNEL_TYPE", "value": agent.channel_type or ""},
+        {"name": "LLM_PROVIDER", "value": agent.provider},
+        {"name": "LLM_MODEL", "value": agent.model},
+        {"name": "LLM_API_KEY", "value": agent.api_key_ref or ""},
+        {"name": "LLM_BASE_URL", "value": ""},
+        {"name": "SYSTEM_PROMPT", "value": agent.system_prompt or ""},
+    ]
+
+    # Add channel-specific env vars
+    channel_config = agent.channel_config or {}
+    if agent.channel_type == "telegram" and channel_config.get("bot_token"):
+        env_vars.append({"name": "TELEGRAM_BOT_TOKEN", "value": channel_config["bot_token"]})
+
+    deployment = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {
+            "name": deployment_name,
+            "namespace": settings.k8s_namespace,
+            "labels": {
+                "app": "falcon-eye",
+                "component": "agent",
+                "agent-id": str(agent.id),
+            },
+        },
+        "spec": {
+            "replicas": 1,
+            "selector": {
+                "matchLabels": {"agent-id": str(agent.id)},
+            },
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": "falcon-eye",
+                        "component": "agent",
+                        "agent-id": str(agent.id),
+                    },
+                },
+                "spec": {
+                    "containers": [{
+                        "name": "agent",
+                        "image": "ghcr.io/amazingct/falcon-eye-agent:latest",
+                        "imagePullPolicy": "IfNotPresent",
+                        "ports": [{"containerPort": 8080, "name": "health"}],
+                        "env": env_vars,
+                        "resources": {
+                            "requests": {"memory": "64Mi", "cpu": "50m"},
+                            "limits": {
+                                "memory": agent.memory_limit or "512Mi",
+                                "cpu": agent.cpu_limit or "500m",
+                            },
+                        },
+                    }],
+                },
+            },
+        },
+    }
+
+    # Add node selector if specified
+    if agent.node_name:
+        deployment["spec"]["template"]["spec"]["nodeSelector"] = {
+            "kubernetes.io/hostname": agent.node_name,
+        }
+        tolerations = settings.get_node_tolerations(agent.node_name)
+        if tolerations:
+            deployment["spec"]["template"]["spec"]["tolerations"] = tolerations
+
+    service = {
+        "apiVersion": "v1",
+        "kind": "Service",
+        "metadata": {
+            "name": service_name,
+            "namespace": settings.k8s_namespace,
+            "labels": {
+                "app": "falcon-eye",
+                "component": "agent",
+                "agent-id": str(agent.id),
+            },
+        },
+        "spec": {
+            "type": "ClusterIP",
+            "selector": {"agent-id": str(agent.id)},
+            "ports": [{"port": 8080, "targetPort": 8080, "name": "health"}],
+        },
+    }
+
+    try:
+        try:
+            apps_api.create_namespaced_deployment(namespace=settings.k8s_namespace, body=deployment)
+            logger.info(f"Created agent deployment: {deployment_name}")
+        except ApiException as e:
+            if e.status == 409:
+                apps_api.replace_namespaced_deployment(name=deployment_name, namespace=settings.k8s_namespace, body=deployment)
+                logger.info(f"Replaced agent deployment: {deployment_name}")
+            else:
+                raise
+
+        try:
+            core_api.create_namespaced_service(namespace=settings.k8s_namespace, body=service)
+            logger.info(f"Created agent service: {service_name}")
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            logger.info(f"Agent service {service_name} already exists")
+
+        return {"deployment_name": deployment_name, "service_name": service_name}
+    except ApiException as e:
+        logger.error(f"K8s API error creating agent deployment: {e.reason}")
+        raise Exception(f"Kubernetes error: {e.reason}")
+
+
+async def delete_agent_deployment(deployment_name: str, service_name: str = None):
+    """Delete agent deployment + service"""
+    try:
+        apps_api.delete_namespaced_deployment(name=deployment_name, namespace=settings.k8s_namespace)
+        logger.info(f"Deleted agent deployment: {deployment_name}")
+    except ApiException as e:
+        if e.status != 404:
+            logger.error(f"Error deleting agent deployment: {e.reason}")
+
+    if service_name:
+        try:
+            core_api.delete_namespaced_service(name=service_name, namespace=settings.k8s_namespace)
+            logger.info(f"Deleted agent service: {service_name}")
+        except ApiException as e:
+            if e.status != 404:
+                logger.error(f"Error deleting agent service: {e.reason}")
+
+
+async def create_k8s_cronjob(cron_job, agent) -> str:
+    """Create K8s CronJob resource"""
+    import re
+    name_slug = re.sub(r"[^a-z0-9-]", "-", cron_job.name.lower()).strip("-")[:40]
+    cronjob_name = f"cron-{name_slug}-{str(cron_job.id)[:8]}"
+
+    k8s_cronjob = {
+        "apiVersion": "batch/v1",
+        "kind": "CronJob",
+        "metadata": {
+            "name": cronjob_name,
+            "namespace": settings.k8s_namespace,
+            "labels": {
+                "app": "falcon-eye",
+                "component": "cron",
+                "cron-id": str(cron_job.id),
+            },
+        },
+        "spec": {
+            "schedule": cron_job.cron_expr,
+            "suspend": not cron_job.enabled,
+            "successfulJobsHistoryLimit": 3,
+            "failedJobsHistoryLimit": 3,
+            "jobTemplate": {
+                "metadata": {
+                    "labels": {
+                        "app": "falcon-eye",
+                        "component": "cron",
+                        "cron-id": str(cron_job.id),
+                    },
+                },
+                "spec": {
+                    "backoffLimit": 1,
+                    "activeDeadlineSeconds": cron_job.timeout_seconds + 30,
+                    "template": {
+                        "metadata": {
+                            "labels": {
+                                "app": "falcon-eye",
+                                "component": "cron",
+                                "cron-id": str(cron_job.id),
+                            },
+                        },
+                        "spec": {
+                            "containers": [{
+                                "name": "cron-runner",
+                                "image": "ghcr.io/amazingct/falcon-eye-cron-runner:latest",
+                                "imagePullPolicy": "IfNotPresent",
+                                "env": [
+                                    {"name": "API_URL", "value": f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"},
+                                    {"name": "AGENT_ID", "value": str(agent.id)},
+                                    {"name": "CRON_JOB_ID", "value": str(cron_job.id)},
+                                    {"name": "PROMPT", "value": cron_job.prompt},
+                                    {"name": "TIMEOUT_SECONDS", "value": str(cron_job.timeout_seconds)},
+                                ],
+                                "resources": {
+                                    "requests": {"memory": "64Mi", "cpu": "50m"},
+                                    "limits": {"memory": "128Mi", "cpu": "200m"},
+                                },
+                            }],
+                            "restartPolicy": "Never",
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    try:
+        batch_api.create_namespaced_cron_job(namespace=settings.k8s_namespace, body=k8s_cronjob)
+        logger.info(f"Created K8s CronJob: {cronjob_name}")
+        return cronjob_name
+    except ApiException as e:
+        if e.status == 409:
+            batch_api.replace_namespaced_cron_job(name=cronjob_name, namespace=settings.k8s_namespace, body=k8s_cronjob)
+            logger.info(f"Replaced K8s CronJob: {cronjob_name}")
+            return cronjob_name
+        logger.error(f"K8s API error creating CronJob: {e.reason}")
+        raise Exception(f"Kubernetes error: {e.reason}")
+
+
+async def update_k8s_cronjob(cron_job, agent) -> None:
+    """Update K8s CronJob resource"""
+    if not cron_job.cronjob_name:
+        return
+    # Simplest approach: delete and recreate
+    try:
+        await delete_k8s_cronjob(cron_job.cronjob_name)
+    except Exception:
+        pass
+    new_name = await create_k8s_cronjob(cron_job, agent)
+    cron_job.cronjob_name = new_name
+
+
+async def delete_k8s_cronjob(cronjob_name: str) -> None:
+    """Delete K8s CronJob resource"""
+    try:
+        batch_api.delete_namespaced_cron_job(name=cronjob_name, namespace=settings.k8s_namespace)
+        logger.info(f"Deleted K8s CronJob: {cronjob_name}")
+    except ApiException as e:
+        if e.status != 404:
+            logger.error(f"Error deleting CronJob: {e.reason}")
+            raise
+
+
+async def trigger_k8s_cronjob(cron_job, agent) -> str:
+    """Create a one-off Job from CronJob template (manual trigger)"""
+    import re
+    from datetime import datetime
+    name_slug = re.sub(r"[^a-z0-9-]", "-", cron_job.name.lower()).strip("-")[:30]
+    timestamp = datetime.utcnow().strftime("%H%M%S")
+    job_name = f"cron-run-{name_slug}-{timestamp}"
+
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": job_name,
+            "namespace": settings.k8s_namespace,
+            "labels": {
+                "app": "falcon-eye",
+                "component": "cron",
+                "cron-id": str(cron_job.id),
+                "manual-trigger": "true",
+            },
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": cron_job.timeout_seconds + 30,
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": "falcon-eye",
+                        "component": "cron",
+                        "cron-id": str(cron_job.id),
+                    },
+                },
+                "spec": {
+                    "containers": [{
+                        "name": "cron-runner",
+                        "image": "ghcr.io/amazingct/falcon-eye-cron-runner:latest",
+                        "imagePullPolicy": "IfNotPresent",
+                        "env": [
+                            {"name": "API_URL", "value": f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"},
+                            {"name": "AGENT_ID", "value": str(agent.id)},
+                            {"name": "CRON_JOB_ID", "value": str(cron_job.id)},
+                            {"name": "PROMPT", "value": cron_job.prompt},
+                            {"name": "TIMEOUT_SECONDS", "value": str(cron_job.timeout_seconds)},
+                        ],
+                        "resources": {
+                            "requests": {"memory": "64Mi", "cpu": "50m"},
+                            "limits": {"memory": "128Mi", "cpu": "200m"},
+                        },
+                    }],
+                    "restartPolicy": "Never",
+                },
+            },
+        },
+    }
+
+    try:
+        batch_api.create_namespaced_job(namespace=settings.k8s_namespace, body=job)
+        logger.info(f"Created manual trigger Job: {job_name}")
+        return job_name
+    except ApiException as e:
+        logger.error(f"K8s API error creating Job: {e.reason}")
+        raise Exception(f"Kubernetes error: {e.reason}")
 
 
 class K8sService:

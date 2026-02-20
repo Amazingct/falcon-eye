@@ -9,6 +9,10 @@ from app.config import get_settings
 from app.database import init_db, close_db
 from app.routes import cameras, nodes, recordings
 from app.routes import settings as settings_routes
+from app.routes.agents import router as agents_router
+from app.routes.agent_chat import router as agent_chat_router
+from app.routes.cron_routes import router as cron_router
+from app.routes.tools import router as tools_router
 from app.chatbot import router as chatbot_router
 from app.models.schemas import HealthResponse
 
@@ -21,6 +25,11 @@ async def lifespan(app: FastAPI):
     # Startup
     print(f"Starting {settings.app_name}...")
     await init_db()
+    # Ensure main agent exists
+    from app.database import AsyncSessionLocal as async_session
+    from app.routes.agents import ensure_main_agent
+    async with async_session() as db:
+        await ensure_main_agent(db)
     yield
     # Shutdown
     await close_db()
@@ -79,6 +88,10 @@ app.include_router(cameras.router)
 app.include_router(nodes.router)
 app.include_router(recordings.router)
 app.include_router(settings_routes.router)
+app.include_router(agents_router)
+app.include_router(agent_chat_router)
+app.include_router(cron_router)
+app.include_router(tools_router)
 app.include_router(chatbot_router)
 
 
