@@ -256,7 +256,7 @@ def generate_service(camera: Camera, deployment_name: str) -> tuple[dict, str]:
             },
         },
         "spec": {
-            "type": "NodePort",
+            "type": "ClusterIP",
             "selector": {"camera-id": str(camera.id)},
             "ports": [
                 {"port": 8081, "targetPort": 8081, "name": "stream"},
@@ -293,42 +293,24 @@ async def create_camera_deployment(camera: Camera) -> dict:
             else:
                 raise
         
-        # Try to create service, get existing if conflict
-        stream_port = None
-        control_port = None
+        # Create or reuse service (ClusterIP — internal only)
         try:
-            created_service = core_api.create_namespaced_service(
+            core_api.create_namespaced_service(
                 namespace=settings.k8s_namespace,
                 body=service,
             )
-            # Extract NodePorts from newly created service
-            for port in created_service.spec.ports:
-                if port.name == "stream":
-                    stream_port = port.node_port
-                elif port.name == "control":
-                    control_port = port.node_port
-            logger.info(f"Created service: {service_name} (stream: {stream_port}, control: {control_port})")
+            logger.info(f"Created service: {service_name}")
         except ApiException as e:
-            if e.status == 409:  # Service exists, read it
-                logger.info(f"Service {service_name} exists, reading...")
-                existing_service = core_api.read_namespaced_service(
-                    name=service_name,
-                    namespace=settings.k8s_namespace,
-                )
-                for port in existing_service.spec.ports:
-                    if port.name == "stream":
-                        stream_port = port.node_port
-                    elif port.name == "control":
-                        control_port = port.node_port
-                logger.info(f"Using existing service: {service_name} (stream: {stream_port}, control: {control_port})")
+            if e.status == 409:
+                logger.info(f"Service {service_name} already exists")
             else:
                 raise
         
         return {
             "deployment_name": deployment_name,
             "service_name": service_name,
-            "stream_port": stream_port,
-            "control_port": control_port,
+            "stream_port": 8081,
+            "control_port": 8080,
         }
         
     except ApiException as e:

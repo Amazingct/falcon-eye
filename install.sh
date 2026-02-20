@@ -474,13 +474,12 @@ kind: Service
 metadata:
   name: falcon-eye-api
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app: falcon-eye-api
   ports:
   - port: ${API_PORT}
     targetPort: ${API_PORT}
-    nodePort: 30901
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -767,9 +766,9 @@ print_access_info() {
         NODE_IP="<node-ip>"
     fi
     
-    echo -e "${YELLOW}Access URLs:${NC}"
+    echo -e "${YELLOW}Access:${NC}"
     echo -e "  📊 Dashboard:  http://${NODE_IP}:30900"
-    echo -e "  🔌 API:        http://${NODE_IP}:30901"
+    echo -e "  (API and all services are internal to the cluster)"
     echo ""
     
     # Show pod status
@@ -838,7 +837,7 @@ show_status() {
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo -e "  📊 ${CYAN}Dashboard${NC}:  http://${NODE_IP}:30900"
-    echo -e "  🔌 ${CYAN}API${NC}:        http://${NODE_IP}:30901"
+    echo -e "  (API and all services are internal to the cluster)"
     echo ""
     
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"

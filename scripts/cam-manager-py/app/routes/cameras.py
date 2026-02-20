@@ -4,9 +4,11 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from sqlalchemy.exc import IntegrityError
+import httpx
 
 from app.database import get_db, get_db_session
 from app.config import get_settings
@@ -31,14 +33,9 @@ def enrich_camera_response(camera: Camera, k8s_status: Optional[dict] = None) ->
     """Add computed fields to camera response"""
     data = camera.to_dict()
     
-    # Build stream URLs
-    if camera.stream_port and camera.node_name:
-        node_ip = settings.get_node_ip(camera.node_name)
-        data["stream_url"] = f"http://{node_ip}:{camera.stream_port}"
-        if camera.control_port:
-            data["control_url"] = f"http://{node_ip}:{camera.control_port}"
+    if camera.service_name:
+        data["stream_url"] = f"/api/cameras/{camera.id}/stream"
     
-    # Add K8s status
     if k8s_status:
         data["k8s_status"] = K8sStatus(**k8s_status)
     
@@ -590,27 +587,66 @@ async def get_stream_info(
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
     
-    stream_url = None
-    control_url = None
-    
-    if camera.stream_port and camera.node_name:
-        node_ip = settings.get_node_ip(camera.node_name)
-        stream_url = f"http://{node_ip}:{camera.stream_port}"
-        if camera.control_port:
-            control_url = f"http://{node_ip}:{camera.control_port}"
+    stream_url = f"/api/cameras/{camera.id}/stream" if camera.service_name else None
     
     return StreamInfo(
         id=camera.id,
         name=camera.name,
         stream_url=stream_url,
-        control_url=control_url,
+        control_url=None,
         protocol=camera.protocol,
         status=camera.status,
     )
 
 
+@router.get("/{camera_id}/stream")
+async def proxy_camera_stream(
+    camera_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Proxy the camera's MJPEG stream from its internal ClusterIP service.
+    
+    This keeps camera services off the public network — the browser only
+    talks to the Dashboard, which proxies through the API to reach streams.
+    """
+    result = await db.execute(select(Camera).where(Camera.id == camera_id))
+    camera = result.scalar_one_or_none()
+
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not camera.service_name:
+        raise HTTPException(status_code=503, detail="Camera has no service")
+
+    internal_url = (
+        f"http://{camera.service_name}"
+        f".{settings.k8s_namespace}.svc.cluster.local:8081/"
+    )
+
+    client = httpx.AsyncClient()
+    req = client.build_request("GET", internal_url)
+
+    try:
+        upstream = await client.send(req, stream=True)
+    except Exception:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="Camera stream unavailable")
+
+    content_type = upstream.headers.get(
+        "content-type", "multipart/x-mixed-replace"
+    )
+
+    async def _relay():
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=4096):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(_relay(), media_type=content_type)
+
+
 # Recording control endpoints
-import httpx
 
 
 async def _get_recorder_url(camera_id: str) -> tuple[str, bool]:
