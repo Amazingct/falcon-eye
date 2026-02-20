@@ -198,10 +198,11 @@ async def start_recording() -> StartResponse:
         
         # FFmpeg command to record from stream
         # Detect stream type and use appropriate settings
-        is_mjpeg = STREAM_URL.endswith("/") or "mjpeg" in STREAM_URL.lower()
+        is_http = STREAM_URL.startswith("http://") or STREAM_URL.startswith("https://")
+        is_mjpeg = STREAM_URL.endswith("/") or "mjpeg" in STREAM_URL.lower() or "mjpg" in STREAM_URL.lower()
         
         if is_mjpeg:
-            # MJPEG stream (from Motion) - need to re-encode to H.264
+            # MJPEG stream (from Motion or HTTP cameras) - need to re-encode to H.264
             cmd = [
                 "ffmpeg",
                 "-y",  # Overwrite output
@@ -215,8 +216,24 @@ async def start_recording() -> StartResponse:
                 "-f", "mp4",
                 file_path,
             ]
+        elif is_http:
+            # HTTP stream (non-MJPEG) - no rtsp_transport flag
+            cmd = [
+                "ffmpeg",
+                "-y",  # Overwrite output
+                "-i", STREAM_URL,
+                "-c:v", "libx264",  # Re-encode to H.264
+                "-preset", "ultrafast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "64k",
+                "-t", str(SEGMENT_DURATION),
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                file_path,
+            ]
         else:
-            # HLS/RTSP stream - copy video, transcode audio to AAC
+            # RTSP stream - copy video, transcode audio to AAC
             # Some cameras output audio codecs (e.g. pcm_mulaw) that MP4
             # containers don't support, so we transcode audio to AAC.
             # If there's no audio stream, ffmpeg ignores the audio flags.
