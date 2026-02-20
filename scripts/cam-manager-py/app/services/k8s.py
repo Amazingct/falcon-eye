@@ -146,7 +146,7 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
                     "containers": [{
                         "name": "recorder",
                         "image": "ghcr.io/amazingct/falcon-eye-recorder:latest",
-                        "imagePullPolicy": "Always",
+                        "imagePullPolicy": "IfNotPresent",
                         "ports": [{"containerPort": 8080, "name": "http"}],
                         "env": [
                             {"name": "CAMERA_ID", "value": str(camera.id)},

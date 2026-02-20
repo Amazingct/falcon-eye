@@ -55,7 +55,7 @@ exec motion -c /etc/motion/motion.conf
     return {
         "name": "motion",
         "image": CAMERA_USB_IMAGE,
-        "imagePullPolicy": "Always",
+        "imagePullPolicy": "IfNotPresent",
         "command": ["/bin/bash", "-c"],
         "args": [config_script],
         "securityContext": {"privileged": True},
@@ -84,7 +84,7 @@ def get_rtsp_container(camera: Camera) -> dict:
     return {
         "name": "rtsp-relay",
         "image": CAMERA_RTSP_IMAGE,
-        "imagePullPolicy": "Always",
+        "imagePullPolicy": "IfNotPresent",
         "env": [
             {"name": "RTSP_URL", "value": rtsp_url},
             {"name": "WIDTH", "value": str(width)},
@@ -110,7 +110,7 @@ def get_onvif_container(camera: Camera) -> dict:
     return {
         "name": "onvif-relay",
         "image": CAMERA_RTSP_IMAGE,  # Same image, supports ONVIF URLs
-        "imagePullPolicy": "Always",
+        "imagePullPolicy": "IfNotPresent",
         "env": [
             {"name": "RTSP_URL", "value": onvif_url},  # Will be converted to RTSP by app.py
             {"name": "WIDTH", "value": str(width)},
@@ -134,7 +134,7 @@ def get_http_container(camera: Camera) -> dict:
     return {
         "name": "http-relay",
         "image": CAMERA_RTSP_IMAGE,  # Same image, works for HTTP streams too
-        "imagePullPolicy": "Always",
+        "imagePullPolicy": "IfNotPresent",
         "env": [
             {"name": "RTSP_URL", "value": http_url},  # HTTP URLs work too
             {"name": "WIDTH", "value": "640"},
