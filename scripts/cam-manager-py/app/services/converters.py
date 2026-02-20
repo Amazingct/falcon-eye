@@ -69,7 +69,7 @@ exec motion -c /etc/motion/motion.conf
         }],
         "resources": {
             "requests": {"memory": "128Mi", "cpu": "100m"},
-            "limits": {"memory": "512Mi", "cpu": "500m"},
+            "limits": {"memory": "1Gi", "cpu": "1"},
         },
     }
 
@@ -95,7 +95,7 @@ def get_rtsp_container(camera: Camera) -> dict:
         "ports": [{"containerPort": 8081, "name": "stream"}],
         "resources": {
             "requests": {"memory": "128Mi", "cpu": "100m"},
-            "limits": {"memory": "512Mi", "cpu": "500m"},
+            "limits": {"memory": "1Gi", "cpu": "1"},
         },
     }
 
@@ -121,7 +121,7 @@ def get_onvif_container(camera: Camera) -> dict:
         "ports": [{"containerPort": 8081, "name": "stream"}],
         "resources": {
             "requests": {"memory": "128Mi", "cpu": "100m"},
-            "limits": {"memory": "512Mi", "cpu": "500m"},
+            "limits": {"memory": "1Gi", "cpu": "1"},
         },
     }
 
