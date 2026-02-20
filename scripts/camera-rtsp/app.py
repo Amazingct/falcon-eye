@@ -51,7 +51,7 @@ def get_stream_url() -> str:
 
 
 def gen_frames():
-    """Generate MJPEG frames from RTSP stream"""
+    """Generate MJPEG frames from RTSP stream with proper multipart boundaries"""
     url = get_stream_url()
     if not url:
         print("No stream URL available")
@@ -61,7 +61,8 @@ def gen_frames():
         'ffmpeg',
         '-rtsp_transport', 'tcp',
         '-i', url,
-        '-f', 'mjpeg',
+        '-f', 'image2pipe',
+        '-vcodec', 'mjpeg',
         '-q:v', '5',
         '-r', FPS,
         '-s', f'{WIDTH}x{HEIGHT}',
@@ -71,13 +72,32 @@ def gen_frames():
     print(f"Starting FFmpeg: {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     
+    buf = b''
+    JPEG_START = b'\xff\xd8'
+    JPEG_END = b'\xff\xd9'
+    
     try:
         while True:
-            # Read JPEG frame
-            data = proc.stdout.read(4096)
-            if not data:
+            chunk = proc.stdout.read(4096)
+            if not chunk:
                 break
-            yield data
+            buf += chunk
+            
+            while True:
+                start = buf.find(JPEG_START)
+                if start == -1:
+                    buf = b''
+                    break
+                end = buf.find(JPEG_END, start)
+                if end == -1:
+                    buf = buf[start:]
+                    break
+                
+                frame = buf[start:end + 2]
+                buf = buf[end + 2:]
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     except GeneratorExit:
         pass
     finally:
@@ -86,21 +106,9 @@ def gen_frames():
 
 
 @app.route('/')
-def index():
-    """Simple HTML page with stream"""
-    return f'''
-    <html>
-    <head><title>Falcon-Eye - {CAMERA_LABEL}</title></head>
-    <body style="margin:0; background:#000;">
-        <img src="/stream" style="width:100%; height:100vh; object-fit:contain;">
-    </body>
-    </html>
-    '''
-
-
 @app.route('/stream')
 def stream():
-    """MJPEG stream endpoint"""
+    """MJPEG stream endpoint (served at both / and /stream)"""
     return Response(
         gen_frames(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
