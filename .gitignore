@@ -8,6 +8,7 @@ venv/
 # Environment files (contain secrets)
 .env
 .env.local
+kubeconfig.yaml
 # Note: .env.production is committed (no secrets, just /api path)
 
 # Logs

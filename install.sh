@@ -28,28 +28,93 @@ echo "║         Distributed Camera Streaming for K8s              ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# Install k3s cluster
+# Install k3s (Linux) or k3d (macOS)
 install_k3s() {
+    OS_TYPE=$(uname -s)
+
+    if [ "$OS_TYPE" = "Darwin" ]; then
+        install_k3d_mac
+    else
+        install_k3s_linux
+    fi
+}
+
+# Linux: native k3s install
+install_k3s_linux() {
     echo -e "${YELLOW}Installing k3s...${NC}"
-    
-    # Install k3s
+
     curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
-    
-    # Wait for k3s to be ready
+
     echo -e "${YELLOW}Waiting for k3s to start...${NC}"
     sleep 10
-    
-    # Set up kubeconfig
+
     mkdir -p ~/.kube
     sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
     sudo chown $(id -u):$(id -g) ~/.kube/config
     export KUBECONFIG=~/.kube/config
-    
-    # Wait for node to be ready
+
     echo -e "${YELLOW}Waiting for node to be ready...${NC}"
     kubectl wait --for=condition=Ready node --all --timeout=120s
-    
+
     echo -e "${GREEN}✓ k3s installed successfully${NC}"
+}
+
+# macOS: k3s is Linux-only, so use k3d (k3s-in-Docker) instead
+install_k3d_mac() {
+    if [ "$(id -u)" -eq 0 ]; then
+        echo -e "${YELLOW}⚠ Running as root is not recommended on macOS.${NC}"
+        echo -e "${YELLOW}  k3d uses Docker Desktop and does not require sudo.${NC}"
+        echo -e "${YELLOW}  Continuing anyway...${NC}"
+        echo ""
+    fi
+
+    echo -e "${YELLOW}macOS detected — k3s requires Linux.${NC}"
+    echo -e "${YELLOW}Installing k3d (runs k3s inside Docker containers)...${NC}"
+    echo ""
+
+    # Docker is required for k3d
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}✗ Docker is required for k3d on macOS but was not found.${NC}"
+        echo -e "  Install Docker Desktop: ${CYAN}https://www.docker.com/products/docker-desktop/${NC}"
+        exit 1
+    fi
+
+    if ! docker info &> /dev/null 2>&1; then
+        echo -e "${RED}✗ Docker is installed but not running. Please start Docker Desktop and try again.${NC}"
+        exit 1
+    fi
+
+    # Install k3d: prefer Homebrew when available and not running as root
+    if command -v k3d &> /dev/null; then
+        echo -e "${GREEN}✓ k3d already installed${NC}"
+    elif [ "$(id -u)" -ne 0 ] && command -v brew &> /dev/null; then
+        echo -e "${YELLOW}Installing k3d via Homebrew...${NC}"
+        brew install k3d
+    else
+        echo -e "${YELLOW}Installing k3d via install script...${NC}"
+        curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.7.5 bash
+    fi
+
+    if ! command -v k3d &> /dev/null; then
+        echo -e "${RED}✗ k3d installation failed${NC}"
+        exit 1
+    fi
+
+    echo -e "${YELLOW}Creating k3d cluster 'falcon-eye'...${NC}"
+    k3d cluster create falcon-eye \
+        --port "30800:30800@server:0" \
+        --port "30900:30900@server:0" \
+        --wait --timeout 120s
+
+    mkdir -p ~/.kube
+    k3d kubeconfig get falcon-eye > ~/.kube/config
+    chmod 600 ~/.kube/config
+    export KUBECONFIG=~/.kube/config
+
+    echo -e "${YELLOW}Waiting for node to be ready...${NC}"
+    kubectl wait --for=condition=Ready node --all --timeout=120s
+
+    echo -e "${GREEN}✓ k3d cluster created successfully (k3s running in Docker)${NC}"
 }
 
 # Set up kubeconfig from user input
@@ -74,87 +139,179 @@ setup_kubeconfig() {
     echo -e "${GREEN}✓ Kubeconfig saved to ~/.kube/config${NC}"
 }
 
+# Ensure kubectl is installed
+ensure_kubectl() {
+    if command -v kubectl &> /dev/null; then
+        echo -e "${GREEN}✓ kubectl found${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}⚠ kubectl not found. Installing...${NC}"
+
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    ARCH=$(uname -m)
+    case $ARCH in
+        x86_64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        armv7l) ARCH="arm" ;;
+    esac
+
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/${OS}/${ARCH}/kubectl"
+    chmod +x kubectl
+    sudo mv kubectl /usr/local/bin/
+
+    if command -v kubectl &> /dev/null; then
+        echo -e "${GREEN}✓ kubectl installed${NC}"
+    else
+        echo -e "${RED}✗ Failed to install kubectl${NC}"
+        exit 1
+    fi
+}
+
+# Detect all reachable kubectl contexts and return them as a list
+detect_contexts() {
+    CONTEXTS=()
+    CONTEXT_DETAILS=()
+
+    while IFS= read -r ctx; do
+        [ -z "$ctx" ] && continue
+        if kubectl --context "$ctx" cluster-info &> /dev/null 2>&1; then
+            CLUSTER_ENDPOINT=$(kubectl --context "$ctx" cluster-info 2>/dev/null | head -1 | awk '{print $NF}' | sed 's/\x1b\[[0-9;]*m//g')
+            CONTEXTS+=("$ctx")
+            CONTEXT_DETAILS+=("$ctx  →  $CLUSTER_ENDPOINT")
+        fi
+    done < <(kubectl config get-contexts -o name 2>/dev/null)
+}
+
 # Check prerequisites
 check_prerequisites() {
     echo -e "${YELLOW}[1/9] Checking prerequisites...${NC}"
-    
-    # Check for kubectl
-    if ! command -v kubectl &> /dev/null; then
-        echo -e "${YELLOW}⚠ kubectl not found. Installing...${NC}"
-        
-        # Detect OS and architecture
-        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-        ARCH=$(uname -m)
-        case $ARCH in
-            x86_64) ARCH="amd64" ;;
-            aarch64|arm64) ARCH="arm64" ;;
-            armv7l) ARCH="arm" ;;
-        esac
-        
-        # Download kubectl
-        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/${OS}/${ARCH}/kubectl"
-        chmod +x kubectl
-        sudo mv kubectl /usr/local/bin/
-        
-        if command -v kubectl &> /dev/null; then
-            echo -e "${GREEN}✓ kubectl installed${NC}"
+
+    ensure_kubectl
+
+    # Non-interactive mode (piped stdin): try the current context silently
+    if [ ! -t 0 ]; then
+        if kubectl cluster-info &> /dev/null 2>&1; then
+            echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
+            CLUSTER_NAME=$(kubectl config current-context 2>/dev/null || echo "unknown")
+            echo -e "  Cluster context: ${BLUE}${CLUSTER_NAME}${NC}"
+            return
         else
-            echo -e "${RED}✗ Failed to install kubectl${NC}"
+            echo -e "${RED}✗ No reachable Kubernetes cluster found (non-interactive mode).${NC}"
+            echo -e "  Set KUBECONFIG or configure ~/.kube/config and try again."
             exit 1
         fi
+    fi
+
+    echo ""
+    echo -e "${CYAN}How would you like to set up the cluster?${NC}"
+    echo ""
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        NEW_LABEL="Create a new cluster  (installs k3d — k3s-in-Docker, recommended for macOS)"
     else
-        echo -e "${GREEN}✓ kubectl found${NC}"
+        NEW_LABEL="Create a new cluster  (installs k3s, recommended for single-node setup)"
     fi
-    
-    # Check for cluster connection
-    if ! kubectl cluster-info &> /dev/null 2>&1; then
-        echo -e "${YELLOW}⚠ Cannot connect to Kubernetes cluster.${NC}"
-        echo ""
-        echo -e "What would you like to do?"
-        echo -e "  ${CYAN}1)${NC} Install k3s on this machine (recommended for single-node setup)"
-        echo -e "  ${CYAN}2)${NC} Paste existing kubeconfig (for remote cluster)"
-        echo -e "  ${CYAN}3)${NC} Exit and configure manually"
-        echo ""
-        
-        read -p "Enter choice [1-3]: " CLUSTER_CHOICE
-        
-        case $CLUSTER_CHOICE in
-            1)
-                echo ""
+
+    echo -e "  ${CYAN}1)${NC} ${NEW_LABEL}"
+    echo -e "  ${CYAN}2)${NC} Connect to an existing cluster"
+    echo ""
+
+    read -p "Enter choice [1-2]: " SETUP_CHOICE
+    echo ""
+
+    case $SETUP_CHOICE in
+        1)
+            if [ "$(uname -s)" = "Darwin" ]; then
+                echo -e "${YELLOW}This will install k3d and create a k3s cluster in Docker.${NC}"
+            else
                 echo -e "${YELLOW}This will install k3s on this machine.${NC}"
-                read -p "Continue? [y/N]: " CONFIRM_K3S
-                if [[ "$CONFIRM_K3S" =~ ^[Yy]$ ]]; then
-                    install_k3s
-                else
-                    echo -e "${RED}Aborted.${NC}"
-                    exit 1
-                fi
-                ;;
-            2)
-                echo ""
-                setup_kubeconfig
-                
-                # Verify connection
-                if ! kubectl cluster-info &> /dev/null 2>&1; then
-                    echo -e "${RED}✗ Still cannot connect. Please check your kubeconfig.${NC}"
-                    exit 1
-                fi
-                ;;
-            3|*)
-                echo ""
-                echo -e "Please configure kubectl manually:"
-                echo "  1. Set up ~/.kube/config"
-                echo "  2. Or set KUBECONFIG environment variable"
-                echo "  3. Run this installer again"
+            fi
+            read -p "Continue? [y/N]: " CONFIRM_K3S
+            if [[ "$CONFIRM_K3S" =~ ^[Yy]$ ]]; then
+                install_k3s
+            else
+                echo -e "${RED}Aborted.${NC}"
                 exit 1
-                ;;
-        esac
-    fi
-    
+            fi
+            ;;
+        2)
+            choose_existing_cluster
+            ;;
+        *)
+            echo -e "${RED}Invalid choice. Exiting.${NC}"
+            exit 1
+            ;;
+    esac
+
     echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
-    
+
     CLUSTER_NAME=$(kubectl config current-context 2>/dev/null || echo "unknown")
     echo -e "  Cluster context: ${BLUE}${CLUSTER_NAME}${NC}"
+}
+
+# Let user pick from existing contexts or paste a kubeconfig
+choose_existing_cluster() {
+    echo -e "${YELLOW}Scanning for reachable kubectl contexts...${NC}"
+    detect_contexts
+
+    # Build the menu dynamically
+    MENU_ITEMS=()
+    MENU_IDX=1
+
+    if [ ${#CONTEXTS[@]} -gt 0 ]; then
+        for detail in "${CONTEXT_DETAILS[@]}"; do
+            echo -e "  ${CYAN}${MENU_IDX})${NC} ${detail}"
+            MENU_ITEMS+=("ctx:$((MENU_IDX-1))")
+            MENU_IDX=$((MENU_IDX+1))
+        done
+    else
+        echo -e "  ${YELLOW}No reachable contexts found in kubeconfig.${NC}"
+    fi
+
+    echo -e "  ${CYAN}${MENU_IDX})${NC} Paste a kubeconfig manually"
+    MENU_ITEMS+=("paste")
+    PASTE_IDX=$MENU_IDX
+    MENU_IDX=$((MENU_IDX+1))
+
+    echo -e "  ${CYAN}${MENU_IDX})${NC} Exit and configure manually"
+    MENU_ITEMS+=("exit")
+    EXIT_IDX=$MENU_IDX
+    echo ""
+
+    read -p "Enter choice [1-${EXIT_IDX}]: " CTX_CHOICE
+    echo ""
+
+    # Validate input
+    if ! [[ "$CTX_CHOICE" =~ ^[0-9]+$ ]] || [ "$CTX_CHOICE" -lt 1 ] || [ "$CTX_CHOICE" -gt "$EXIT_IDX" ]; then
+        echo -e "${RED}Invalid choice. Exiting.${NC}"
+        exit 1
+    fi
+
+    SELECTED="${MENU_ITEMS[$((CTX_CHOICE-1))]}"
+
+    case "$SELECTED" in
+        ctx:*)
+            IDX="${SELECTED#ctx:}"
+            CHOSEN_CTX="${CONTEXTS[$IDX]}"
+            kubectl config use-context "$CHOSEN_CTX" > /dev/null
+            echo -e "${GREEN}✓ Switched to context: ${CHOSEN_CTX}${NC}"
+            ;;
+        paste)
+            setup_kubeconfig
+            if ! kubectl cluster-info &> /dev/null 2>&1; then
+                echo -e "${RED}✗ Cannot connect with the provided kubeconfig. Please check it and try again.${NC}"
+                exit 1
+            fi
+            ;;
+        exit)
+            echo -e "Please configure kubectl manually:"
+            echo "  1. Set up ~/.kube/config"
+            echo "  2. Or set KUBECONFIG environment variable"
+            echo "  3. Run this installer again"
+            exit 1
+            ;;
+    esac
 }
 
 # Check for existing installation
@@ -474,12 +631,13 @@ kind: Service
 metadata:
   name: falcon-eye-api
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: falcon-eye-api
   ports:
   - port: ${API_PORT}
     targetPort: ${API_PORT}
+    nodePort: 30800
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -736,6 +894,23 @@ EOF
     echo -e "${GREEN}✓ Cleanup CronJob configured (runs: ${CLEANUP_INTERVAL})${NC}"
 }
 
+# Resolve the IP/hostname users should use to reach NodePort services
+get_access_host() {
+    local CONTEXT
+    CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
+
+    # k3d clusters use Docker networking; NodePorts are forwarded to localhost
+    if echo "$CONTEXT" | grep -q "k3d-"; then
+        echo "localhost"
+        return
+    fi
+
+    # Default: use the first node's InternalIP
+    local IP
+    IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
+    echo "${IP:-<node-ip>}"
+}
+
 # Wait for rollout
 wait_for_rollout() {
     echo ""
@@ -759,16 +934,11 @@ print_access_info() {
     echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     
-    # Get node IPs
-    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
-    
-    if [ -z "$NODE_IP" ]; then
-        NODE_IP="<node-ip>"
-    fi
+    NODE_IP=$(get_access_host)
     
     echo -e "${YELLOW}Access:${NC}"
     echo -e "  📊 Dashboard:  http://${NODE_IP}:30900"
-    echo -e "  (API and all services are internal to the cluster)"
+    echo -e "  🔌 API:        http://${NODE_IP}:30800"
     echo ""
     
     # Show pod status
@@ -823,11 +993,7 @@ show_status() {
         exit 1
     fi
     
-    # Get node IP
-    NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
-    if [ -z "$NODE_IP" ]; then
-        NODE_IP="<node-ip>"
-    fi
+    NODE_IP=$(get_access_host)
     
     echo -e "${GREEN}✓ Falcon-Eye is installed${NC}"
     echo ""
@@ -837,7 +1003,7 @@ show_status() {
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo -e "  📊 ${CYAN}Dashboard${NC}:  http://${NODE_IP}:30900"
-    echo -e "  (API and all services are internal to the cluster)"
+    echo -e "  🔌 ${CYAN}API${NC}:        http://${NODE_IP}:30800"
     echo ""
     
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"

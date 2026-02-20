@@ -128,20 +128,6 @@ function App() {
                   <Film className="h-4 w-4" />
                   <span>Recordings</span>
                 </button>
-                <button
-                  onClick={() => setCurrentPage('agents')}
-                  className={`px-3 py-1 rounded flex items-center space-x-1 text-sm ${currentPage === 'agents' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                >
-                  <Bot className="h-4 w-4" />
-                  <span>Agents</span>
-                </button>
-                <button
-                  onClick={() => setCurrentPage('cron')}
-                  className={`px-3 py-1 rounded flex items-center space-x-1 text-sm ${currentPage === 'cron' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                >
-                  <Clock className="h-4 w-4" />
-                  <span>Cron</span>
-                </button>
               </div>
             </div>
             <div className="flex items-center space-x-4">
@@ -284,10 +270,6 @@ function App() {
                   onError={setError}
                 />
               )
-            ) : currentPage === 'agents' ? (
-              <AgentsPage />
-            ) : currentPage === 'cron' ? (
-              <CronJobsPage />
             ) : currentPage === 'chat' ? (
               <AgentChat />
             ) : (
@@ -1444,6 +1426,8 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
     { id: 'api', label: 'API Settings', icon: Key, description: 'External integrations' },
     { id: 'nodes', label: 'Nodes & Cluster', icon: Server, description: 'Kubernetes management' },
     { id: 'chatbot', label: 'Chatbot', icon: Bot, description: 'AI assistant config' },
+    { id: 'agents', label: 'Agents', icon: Bot, description: 'Manage AI agents' },
+    { id: 'cron', label: 'Cron Jobs', icon: Clock, description: 'Scheduled tasks' },
   ]
 
   return (
@@ -1830,6 +1814,18 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
               )}
 
               {/* ── Chatbot ── */}
+              {activeSection === 'agents' && (
+                <div className="space-y-8">
+                  <AgentsPage />
+                </div>
+              )}
+
+              {activeSection === 'cron' && (
+                <div className="space-y-8">
+                  <CronJobsPage />
+                </div>
+              )}
+
               {activeSection === 'chatbot' && (
                 <div className="space-y-8">
                   <div>
