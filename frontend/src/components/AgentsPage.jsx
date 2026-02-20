@@ -280,6 +280,24 @@ function AgentModal({ agent, onClose, onSave }) {
     }))
   }
 
+  const allToolIds = Object.values(allTools).flat().map(t => t.id)
+  const allSelected = allToolIds.length > 0 && allToolIds.every(id => form.tools.includes(id))
+
+  const toggleAll = () => {
+    setForm(f => ({ ...f, tools: allSelected ? [] : [...allToolIds] }))
+  }
+
+  const toggleCategory = (categoryTools) => {
+    const ids = categoryTools.map(t => t.id)
+    const allIn = ids.every(id => form.tools.includes(id))
+    setForm(f => ({
+      ...f,
+      tools: allIn
+        ? f.tools.filter(id => !ids.includes(id))
+        : [...new Set([...f.tools, ...ids])],
+    }))
+  }
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 overflow-y-auto py-8">
       <div className="bg-gray-800 rounded-lg w-full max-w-lg mx-4 border border-gray-700 max-h-[90vh] overflow-y-auto">
@@ -361,21 +379,40 @@ function AgentModal({ agent, onClose, onSave }) {
           {/* Tools */}
           {Object.keys(allTools).length > 0 && (
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Tools</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-300">Tools</label>
+                <label className="flex items-center space-x-2 cursor-pointer text-xs text-gray-400 hover:text-gray-200">
+                  <input type="checkbox" checked={allSelected} onChange={toggleAll} className="rounded bg-gray-600 border-gray-500 text-blue-500" />
+                  <span>Select all ({form.tools.length}/{allToolIds.length})</span>
+                </label>
+              </div>
               <div className="bg-gray-700/50 rounded-lg p-3 max-h-48 overflow-y-auto space-y-3">
-                {Object.entries(allTools).map(([category, tools]) => (
-                  <div key={category}>
-                    <p className="text-xs font-semibold text-gray-400 uppercase mb-1">{category}</p>
-                    <div className="space-y-1">
-                      {tools.map(tool => (
-                        <label key={tool.id} className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 rounded px-2 py-1">
-                          <input type="checkbox" checked={form.tools.includes(tool.id)} onChange={() => toggleTool(tool.id)} className="rounded bg-gray-600 border-gray-500 text-blue-500" />
-                          <span className="text-sm">{tool.name}</span>
-                        </label>
-                      ))}
+                {Object.entries(allTools).map(([category, tools]) => {
+                  const categoryAllSelected = tools.every(t => form.tools.includes(t.id))
+                  const categorySomeSelected = !categoryAllSelected && tools.some(t => form.tools.includes(t.id))
+                  return (
+                    <div key={category}>
+                      <label className="flex items-center space-x-2 cursor-pointer mb-1 hover:bg-gray-700 rounded px-1 py-0.5">
+                        <input
+                          type="checkbox"
+                          checked={categoryAllSelected}
+                          ref={el => { if (el) el.indeterminate = categorySomeSelected }}
+                          onChange={() => toggleCategory(tools)}
+                          className="rounded bg-gray-600 border-gray-500 text-blue-500"
+                        />
+                        <span className="text-xs font-semibold text-gray-400 uppercase">{category}</span>
+                      </label>
+                      <div className="space-y-1 ml-4">
+                        {tools.map(tool => (
+                          <label key={tool.id} className="flex items-center space-x-2 cursor-pointer hover:bg-gray-700 rounded px-2 py-1">
+                            <input type="checkbox" checked={form.tools.includes(tool.id)} onChange={() => toggleTool(tool.id)} className="rounded bg-gray-600 border-gray-500 text-blue-500" />
+                            <span className="text-sm">{tool.name}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
