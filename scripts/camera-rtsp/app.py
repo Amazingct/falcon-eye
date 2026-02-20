@@ -50,13 +50,8 @@ def get_stream_url() -> str:
     return url
 
 
-def gen_frames():
-    """Generate MJPEG frames from RTSP stream with proper multipart boundaries"""
-    url = get_stream_url()
-    if not url:
-        print("No stream URL available")
-        return
-    
+def gen_frames_ffmpeg(url):
+    """Generate MJPEG frames from RTSP/ONVIF stream via ffmpeg"""
     cmd = [
         'ffmpeg',
         '-rtsp_transport', 'tcp',
@@ -103,6 +98,64 @@ def gen_frames():
     finally:
         proc.kill()
         proc.wait()
+
+
+def gen_frames_http_proxy(url):
+    """Proxy an existing HTTP/MJPEG stream, re-framing with our boundary.
+    This avoids ffmpeg entirely — just reads JPEG frames from the source
+    and re-wraps them with our multipart boundary."""
+    import urllib.request
+    
+    print(f"Proxying HTTP MJPEG stream: {url}")
+    
+    try:
+        req = urllib.request.Request(url)
+        resp = urllib.request.urlopen(req, timeout=30)
+        
+        buf = b''
+        JPEG_START = b'\xff\xd8'
+        JPEG_END = b'\xff\xd9'
+        
+        while True:
+            chunk = resp.read(4096)
+            if not chunk:
+                break
+            buf += chunk
+            
+            while True:
+                start = buf.find(JPEG_START)
+                if start == -1:
+                    buf = b''
+                    break
+                end = buf.find(JPEG_END, start)
+                if end == -1:
+                    buf = buf[start:]
+                    break
+                
+                frame = buf[start:end + 2]
+                buf = buf[end + 2:]
+                
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+    except GeneratorExit:
+        pass
+    except Exception as e:
+        print(f"HTTP proxy error: {e}")
+
+
+def gen_frames():
+    """Route to the right frame generator based on stream URL type"""
+    url = get_stream_url()
+    if not url:
+        print("No stream URL available")
+        return
+    
+    # HTTP/MJPEG sources: proxy directly (no ffmpeg needed)
+    if url.startswith('http://') or url.startswith('https://'):
+        yield from gen_frames_http_proxy(url)
+    else:
+        # RTSP/ONVIF: use ffmpeg to transcode
+        yield from gen_frames_ffmpeg(url)
 
 
 @app.route('/')
