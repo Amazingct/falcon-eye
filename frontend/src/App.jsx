@@ -2103,23 +2103,24 @@ function RecordingsPage({ cameras }) {
 
   // Fetch all recordings
   useEffect(() => {
-    const fetchRecordings = async () => {
-      setLoading(true)
+    let isMounted = true
+    const fetchRecordings = async (isInitial) => {
+      if (isInitial) setLoading(true)
       try {
         const res = await fetch(`${API_URL}/recordings/`)
-        if (res.ok) {
+        if (res.ok && isMounted) {
           const data = await res.json()
           setRecordings(data.recordings || [])
         }
       } catch (err) {
         console.error('Failed to fetch recordings:', err)
       } finally {
-        setLoading(false)
+        if (isInitial && isMounted) setLoading(false)
       }
     }
-    fetchRecordings()
-    const interval = setInterval(fetchRecordings, 10000) // Refresh every 10s
-    return () => clearInterval(interval)
+    fetchRecordings(true)
+    const interval = setInterval(() => fetchRecordings(false), 10000)
+    return () => { isMounted = false; clearInterval(interval) }
   }, [])
 
   // Group recordings by camera (or by camera_name for orphaned recordings)
@@ -2196,16 +2197,43 @@ function RecordingsPage({ cameras }) {
     ? recordings 
     : recordings.filter(r => r.status === filter)
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-6">
+      {/* Video Player Modal — rendered outside loading guard so playback is never interrupted */}
+      {selectedRecording && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg max-w-4xl w-full mx-4 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+              <div>
+                <h3 className="font-medium">{selectedRecording.file_name}</h3>
+                <p className="text-sm text-gray-400">{formatDate(selectedRecording.start_time)}</p>
+              </div>
+              <button
+                onClick={() => setSelectedRecording(null)}
+                className="p-2 hover:bg-gray-700 rounded-lg transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="aspect-video bg-black">
+              <video
+                key={selectedRecording.id}
+                src={`${API_URL}/recordings/${selectedRecording.id}/download`}
+                controls
+                autoPlay
+                className="w-full h-full"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+          <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
+        </div>
+      ) : (
+      <>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -2346,33 +2374,7 @@ function RecordingsPage({ cameras }) {
           )})}
         </div>
       )}
-
-      {/* Video Player Modal */}
-      {selectedRecording && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg max-w-4xl w-full mx-4 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-              <div>
-                <h3 className="font-medium">{selectedRecording.file_name}</h3>
-                <p className="text-sm text-gray-400">{formatDate(selectedRecording.start_time)}</p>
-              </div>
-              <button
-                onClick={() => setSelectedRecording(null)}
-                className="p-2 hover:bg-gray-700 rounded-lg transition"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="aspect-video bg-black">
-              <video
-                src={`${API_URL}/recordings/${selectedRecording.id}/download`}
-                controls
-                autoPlay
-                className="w-full h-full"
-              />
-            </div>
-          </div>
-        </div>
+      </>
       )}
     </div>
   )

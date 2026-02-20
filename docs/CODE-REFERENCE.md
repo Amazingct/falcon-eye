@@ -18,12 +18,12 @@ falcon-eye/
 │   │       ├── database.py             # SQLAlchemy async engine + sessions
 │   │       ├── models/
 │   │       │   ├── camera.py           # Camera ORM model + enums
-│   │       │   ├── recording.py        # Recording ORM model
+│   │       │   ├── recording.py        # Recording ORM model (incl. node_name)
 │   │       │   ├── chat.py             # ChatSession + ChatMessage models
 │   │       │   └── schemas.py          # Pydantic request/response schemas
 │   │       ├── routes/
-│   │       │   ├── cameras.py          # Camera CRUD + start/stop/restart + recording control
-│   │       │   ├── recordings.py       # Recordings CRUD + download
+│   │       │   ├── cameras.py          # Camera CRUD + start/stop/restart + recording control + stream proxy
+│   │       │   ├── recordings.py       # Recordings CRUD + download (via file-server DaemonSet)
 │   │       │   ├── nodes.py            # Node listing + USB/network camera scanning
 │   │       │   └── settings.py         # Settings CRUD + restart-all + clear-all
 │   │       ├── services/
@@ -33,6 +33,7 @@ falcon-eye/
 │   │       │   └── cleanup.py          # CronJob: orphan cleanup + recording fix
 │   │       └── chatbot/                # AI chatbot (Anthropic Claude)
 │   │           ├── __init__.py
+│   │           ├── graph.py
 │   │           ├── router.py
 │   │           └── tools.py
 │   │
@@ -52,7 +53,7 @@ falcon-eye/
 │
 └── frontend/                           # Dashboard (React SPA)
     ├── Dockerfile                      # Multi-stage: node build → nginx
-    ├── nginx.conf.template             # nginx config with API proxy
+    ├── nginx.conf.template             # nginx config with API + stream proxy
     ├── package.json
     ├── vite.config.js
     ├── tailwind.config.js
@@ -71,13 +72,13 @@ falcon-eye/
 - **Database**: PostgreSQL 15
 - **K8s client**: official `kubernetes` Python client
 - **Validation**: Pydantic v2 with `pydantic-settings`
-- **HTTP client**: `httpx` (async, for communicating with recorder pods)
+- **HTTP client**: `httpx` (async, for communicating with recorder pods and proxying streams)
 - **Server**: Uvicorn
 
 ### Entry Point (`main.py`)
 
 - Creates FastAPI app with lifespan handler
-- On startup: calls `init_db()` which runs `Base.metadata.create_all` (auto-creates tables)
+- On startup: calls `init_db()` which runs `Base.metadata.create_all` (auto-creates tables) plus lightweight migrations (e.g., `ALTER TABLE recordings ADD COLUMN IF NOT EXISTS node_name`)
 - CORS middleware allows all origins
 - Registers routers: cameras, nodes, recordings, settings, chatbot
 - Global exception handler returns JSON errors
@@ -90,6 +91,7 @@ Uses `pydantic-settings` to load from environment variables:
 - K8s config: tries in-cluster config first, then kubeconfig file, then `~/.kube/config`
 - Node IPs are **auto-discovered** by querying the K8s API for each node's `InternalIP` address, cached with a 5-minute TTL
 - Defaults: 640×480 resolution, 15 fps, stream quality 70
+- `DEFAULT_CAMERA_NODE` and `DEFAULT_RECORDER_NODE`: empty strings mean "let K8s scheduler decide"
 
 ### Database (`database.py`)
 
@@ -97,6 +99,7 @@ Uses `pydantic-settings` to load from environment variables:
 - **Session factory**: `async_sessionmaker` with `expire_on_commit=False`
 - **Dependency**: `get_db()` yields an `AsyncSession`, commits on success, rolls back on error
 - **Context managers**: `get_db_context()` and `get_db_session()` for use in background tasks
+- **Migrations**: `init_db()` runs `create_all` plus manual `ALTER TABLE` statements for columns added after initial release (e.g., `node_name` on `recordings`)
 - Tables are created automatically on startup (no migration tool needed)
 
 ### Models
@@ -111,7 +114,7 @@ Uses `pydantic-settings` to load from environment variables:
 #### `Recording` (`models/recording.py`)
 - String primary key (format: `{camera_id}_{timestamp}`)
 - Foreign key to Camera with `SET NULL` on delete (recordings survive camera deletion)
-- Fields: camera_id, camera_name (preserved), file_path, file_name, start_time, end_time, duration_seconds, file_size_bytes, status, error_message, camera_deleted flag
+- Fields: camera_id, camera_name (preserved), file_path, file_name, start_time, end_time, duration_seconds, file_size_bytes, status, error_message, camera_deleted flag, **node_name** (tracks which node holds the recording file)
 - Statuses: `recording`, `stopped`, `completed`, `failed`, `error`
 
 #### `ChatSession` / `ChatMessage` (`models/chat.py`)
@@ -130,12 +133,17 @@ The main CRUD router. Key behaviors:
 - **Delete**: Background task — marks as `deleting`, deletes K8s resources, waits for pod termination (extra 15s grace for USB), marks recordings as orphaned, then deletes DB record.
 - **Start/Stop/Restart**: Creates or deletes K8s resources accordingly.
 - **Recording control**: Proxies to the recorder pod's API via internal ClusterIP service. Auto-deploys recorder if not present. Fixes orphaned recordings when recorder pod is gone.
+- **Stream proxy** (`GET /{camera_id}/stream`): Proxies the camera's internal MJPEG stream to the browser. Uses `httpx.AsyncClient` with streaming to relay `multipart/x-mixed-replace` content from the camera pod's ClusterIP service. Handles connection errors with a 502 response.
 
 Duplicate prevention: checks for existing cameras with same device_path (USB) or IP address (network).
 
+Stream URL enrichment: `stream_url` is set to the relative path `/api/cameras/{id}/stream` (not a direct NodePort URL), and `control_url` is `null` since camera services are internal.
+
 #### Recordings (`routes/recordings.py`)
 
-Standard CRUD. The `POST` and `PATCH` endpoints are called by the recorder service (not by users). `download` endpoint serves the MP4 file via `FileResponse`.
+Standard CRUD. The `POST` and `PATCH` endpoints are called by the recorder service (not by users). The `POST` endpoint accepts an optional `node_name` field.
+
+The `download` endpoint locates recording files across the cluster by querying file-server DaemonSet pods. It uses the recording's `node_name` as a hint for optimized lookup, falling back to scanning all file-server pods if the file isn't found on the hinted node.
 
 #### Nodes (`routes/nodes.py`)
 
@@ -144,7 +152,7 @@ Standard CRUD. The `POST` and `PATCH` endpoints are called by the recorder servi
 
 #### Settings (`routes/settings.py`)
 
-- **Get**: Reads from ConfigMap + environment. Includes chatbot configuration.
+- **Get**: Reads from ConfigMap + environment. Includes chatbot configuration, `default_camera_node`, and `default_recorder_node`.
 - **Update**: Writes to ConfigMap. API key stored in separate K8s Secret (`falcon-eye-secrets`). API key is validated against Anthropic's API before saving.
 - **Restart All**: Patches all deployments with `restartedAt` annotation. Updates CronJob schedule.
 - **Clear All**: Deletes all cameras and their K8s resources.
@@ -156,10 +164,10 @@ Standard CRUD. The `POST` and `PATCH` endpoints are called by the recorder servi
 Core orchestration layer. Handles all Kubernetes API interactions:
 
 - **`generate_deployment()`**: Creates Deployment manifest with labels, nodeSelector, Jetson tolerations, container spec from converters
-- **`generate_service()`**: Creates NodePort Service with `stream` (8081) and `control` (8080) ports
-- **`generate_recorder_deployment()`**: Creates Recorder Deployment with stream URL, API URL, recordings hostPath
+- **`generate_service()`**: Creates **ClusterIP** Service with `stream` (8081) and `control` (8080) ports
+- **`generate_recorder_deployment()`**: Creates Recorder Deployment with stream URL, API URL, recordings hostPath, and `NODE_NAME` env var (injected via Kubernetes Downward API using `fieldRef: {fieldPath: spec.nodeName}`)
 - **`generate_recorder_service()`**: Creates ClusterIP Service for recorder
-- **`create_camera_deployment()`**: Creates Deployment + Service, handles 409 conflicts by replacing. Returns deployment name, service name, allocated NodePorts
+- **`create_camera_deployment()`**: Creates Deployment + Service, handles 409 conflicts by replacing. Returns deployment name, service name, and internal container ports (8081 for stream, 8080 for control)
 - **`create_recorder_deployment()`**: Builds stream URL based on protocol (MJPEG ClusterIP for USB, direct RTSP for network cameras), creates Deployment + Service
 - **`delete_*`**: Deletes resources by name or label selector, ignores 404
 - **`get_camera_pod_status()`**: Checks actual container state (running/waiting/terminated) and maps to app status
@@ -213,7 +221,7 @@ The entire app is a **single-file SPA** (`App.jsx`). Components are defined as f
 | `EditCameraModal` | Form to edit camera settings |
 | `CameraPreviewModal` | Full-size camera stream view |
 | `ScanCamerasModal` | USB + network camera discovery |
-| `SettingsModal` | System settings management |
+| `SettingsModal` | System settings management (incl. default camera/recorder node) |
 | `ChatWidget` | AI chatbot with session management, docking, resizing |
 | `RecordingsPage` | Recordings grouped by camera with playback |
 
@@ -224,15 +232,20 @@ The entire app is a **single-file SPA** (`App.jsx`). Components are defined as f
 - Camera list auto-refreshes every 5 seconds
 - Recording status checks every 10 seconds
 - Chat uses Server-Sent Events (SSE) for streaming responses
+- Camera streams use the relative URL `/api/cameras/{id}/stream` as `<img>` source — the browser loads streams through the Dashboard → API → Camera proxy chain
 
 ### nginx Proxy (`nginx.conf.template`)
 
 The nginx config uses `envsubst` (built into `nginx:alpine`) to inject `$API_URL`:
 
-- `/api/*` → proxied to API server with WebSocket upgrade support
-- `/api/chat/*` → separate location with SSE-specific settings (no buffering, 1-hour timeouts)
-- `/` → serves SPA with `try_files` fallback to `index.html`
-- Static assets: 1-year cache with immutable header
+| Location | Pattern | Target | Special Settings |
+|----------|---------|--------|-----------------|
+| Stream proxy | `~ ^/api/cameras/[^/]+/stream$` | API Server | No buffering, no cache, 24-hour read/send timeouts |
+| Chat SSE | `/api/chat/` | API Server | No buffering, 1-hour timeouts |
+| General API | `/api/` | API Server | Standard proxy with WebSocket upgrade |
+| Static files | `/` | SPA files | `try_files` fallback to `index.html`, 1-year cache for assets |
+
+The stream proxy location uses a regex to match camera stream URLs and applies very long timeouts (86400s) to keep the continuous MJPEG stream alive without nginx closing the connection.
 
 ---
 
@@ -242,7 +255,7 @@ The nginx config uses `envsubst` (built into `nginx:alpine`) to inject `$API_URL
 
 - **Base**: Ubuntu 22.04 with `motion` package
 - **How it works**: At deployment time, the API generates a `motion.conf` via a bash script injected as the container command. This configures the video device, resolution, framerate, stream port, and overlay text.
-- **Ports**: 8081 (MJPEG stream), 8080 (Motion web control interface)
+- **Ports**: 8081 (MJPEG stream), 8080 (Motion web control interface) — both ClusterIP only
 - **Security**: Requires `privileged: true` for USB device access
 - **Volume**: hostPath mount of the specific `/dev/videoX` device
 
@@ -262,6 +275,7 @@ The nginx config uses `envsubst` (built into `nginx:alpine`) to inject `$API_URL
 - **Framework**: FastAPI on Uvicorn, port 8080
 - **Endpoints**: `/health`, `/status`, `/start`, `/stop`
 - **State**: Single recording at a time, managed via global variables with an async lock
+- **Node tracking**: Reads `NODE_NAME` from environment (injected via K8s Downward API) and reports it to the API when creating recording records
 
 ### Recording Logic
 
@@ -284,9 +298,21 @@ Video is copied without re-encoding (preserving original quality, including HEVC
 1. **Start**: Creates output directory, generates filename with timestamp, spawns FFmpeg subprocess
 2. **Monitor**: Background task checks if FFmpeg exited prematurely and reports failure to the API
 3. **Stop**: Sends `SIGINT` for graceful FFmpeg shutdown (finalizes MP4 headers), waits up to 10s, then `SIGKILL` if needed
-4. **Report**: Notifies the main API of recording start/stop/failure via HTTP POST/PATCH to `/api/recordings/`
+4. **Report**: Notifies the main API of recording start/stop/failure via HTTP POST/PATCH to `/api/recordings/`, including `node_name` on start
 
 Files are stored at: `/data/falcon-eye/recordings/{camera_id}/{camera_name}_{timestamp}.mp4`
+
+---
+
+## File-Server DaemonSet
+
+- **Image**: `nginx:alpine`
+- **Type**: DaemonSet running on every node
+- **Tolerations**: `operator: Exists` — runs on all nodes including control-plane/master
+- **Volume**: `/data/falcon-eye/recordings` mounted read-only at `/recordings`
+- **Port**: 8080 via headless ClusterIP service
+- **Purpose**: The API queries file-server pods to locate and stream recording files for download. Uses the recording's `node_name` as a hint for optimized lookup.
+- **Config**: Dedicated ConfigMap (`file-server-nginx-config`) with autoindex and static file serving
 
 ---
 
@@ -300,7 +326,9 @@ Files are stored at: `/data/falcon-eye/recordings/{camera_id}/{camera_name}_{tim
 | `falcon-eye-camera-rtsp` | `scripts/camera-rtsp/Dockerfile` | Python 3.11-slim | FFmpeg, Flask, onvif-zeep |
 | `falcon-eye-recorder` | `scripts/recorder/Dockerfile` | Python 3.11-slim | FFmpeg, FastAPI, httpx |
 
-All images are built for **linux/amd64** and **linux/arm64** via Docker Buildx with QEMU emulation. The container runtime automatically selects the correct platform — no user configuration required.
+The file-server DaemonSet uses the standard `nginx:alpine` image directly — no custom build required.
+
+All custom images are built for **linux/amd64** and **linux/arm64** via Docker Buildx with QEMU emulation. The container runtime automatically selects the correct platform — no user configuration required.
 
 ---
 

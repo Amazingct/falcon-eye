@@ -183,6 +183,8 @@ Click the red pulsing **Stop** button (■) on the camera card. The recording is
 
 > **Note**: If a camera is deleted while recording, the recording is preserved and marked with a "Camera Deleted" badge. You can still play and download it.
 
+> **Note**: Recordings are stored on the cluster node where the recorder pod ran. The system automatically locates and retrieves recordings from any node when you play or download them.
+
 ---
 
 ## AI Chatbot
@@ -224,6 +226,10 @@ Click the **Settings** (gear) icon to access:
 - **Resolution**: Default resolution for new cameras (640×480 recommended)
 - **Framerate**: Default FPS for new cameras
 
+### Node Defaults
+- **Default Camera Node**: Which node new cameras should be scheduled on (leave empty to let Kubernetes decide)
+- **Default Recorder Node**: Which node new recorders should be scheduled on (leave empty to let Kubernetes decide)
+
 ### System Settings
 - **Cleanup Interval**: How often the system checks for orphaned resources (default: every 2 minutes)
 - **Creating Timeout**: How long to wait before marking a stuck camera as error (default: 3 minutes)
@@ -245,6 +251,7 @@ If your system has multiple servers (nodes), cameras are distributed across them
 
 - **USB cameras** automatically run on the server they're plugged into
 - **Network cameras** can run on any server
+- **Recordings** are stored on the node where the recorder runs, but can be played/downloaded from any node
 - The node name appears on each camera card
 
 You don't need to manage this — it happens automatically. The dashboard shows which node each camera is on.
@@ -264,10 +271,10 @@ You don't need to manage this — it happens automatically. The dashboard shows 
 
 ### Stream not loading (LIVE but no video)
 
-1. Check that your browser isn't blocking mixed content (HTTP stream on HTTPS page)
-2. Try opening the stream URL directly: click Edit to see the camera's node and port
-3. Try a different browser
-4. Click **Restart** on the camera
+1. Try a different browser (Chrome and Firefox work best)
+2. Click **Restart** on the camera
+3. Check Settings to make sure the system is working (check node counts)
+4. Ask your system administrator to check if the pods are running
 
 ### Recording failed
 

@@ -59,21 +59,6 @@ K8s config resolution order:
 |----------|---------|-------------|
 | `JETSON_NODES` | `[]` | JSON list of node names that are NVIDIA Jetson devices. Pods scheduled to these nodes get a `dedicated=jetson:NoSchedule` toleration. Example: `["ace", "falcon"]` |
 
-### Port Range
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `STREAM_PORT_START` | `30900` | Logical start of NodePort range for camera streams |
-| `STREAM_PORT_END` | `30999` | Logical end of NodePort range |
-
-> **Note**: These are informational/tracking values. Actual NodePort numbers are assigned by Kubernetes from the cluster's NodePort range (default 30000–32767).
-
-### Node IP Discovery
-
-Node IP addresses are **auto-discovered** by querying the Kubernetes API for each node's `InternalIP` address. Results are cached with a **5-minute TTL** for performance. Stream URLs (e.g., `http://<node-ip>:<nodeport>`) are constructed dynamically.
-
-No manual IP configuration is needed.
-
 ---
 
 ## ConfigMap: `falcon-eye-config`
@@ -84,6 +69,8 @@ The Settings page reads and writes to this ConfigMap. It stores:
 |-----|--------------|-------------|
 | `DEFAULT_RESOLUTION` | `640x480` | Default camera resolution |
 | `DEFAULT_FRAMERATE` | `15` | Default camera FPS |
+| `DEFAULT_CAMERA_NODE` | *(empty)* | Default node for cameras (empty = auto-assign) |
+| `DEFAULT_RECORDER_NODE` | *(empty)* | Default node for recorders (empty = auto-assign) |
 | `CLEANUP_INTERVAL` | `*/2 * * * *` | Cron schedule for cleanup job |
 | `CREATING_TIMEOUT_MINUTES` | `3` | Auto-stop cameras stuck in "creating" |
 | `CHATBOT_TOOLS` | `list_cameras,get_camera,list_nodes` | Comma-separated list of enabled chatbot tools |
@@ -144,6 +131,7 @@ Set automatically when creating recorder deployments:
 | `API_URL` | `http://falcon-eye-api:8000` | Main API URL for reporting recordings |
 | `RECORDINGS_PATH` | `/recordings` | Base path for recording files (mapped to hostPath) |
 | `SEGMENT_DURATION` | `3600` | Maximum recording duration in seconds (1 hour) |
+| `NODE_NAME` | *(auto-injected)* | Kubernetes node where the pod is running. Injected via the Downward API (`spec.nodeName`). Sent to the API when creating recording records so files can be located later. |
 
 ### Stream URL Logic
 
@@ -165,6 +153,17 @@ The recorder's `STREAM_URL` is determined by protocol:
 
 The nginx config template uses `envsubst` to inject this at container startup.
 
+### nginx Proxy Locations
+
+The Dashboard's nginx configuration proxies all API and stream requests:
+
+| Location | Target | Special Settings |
+|----------|--------|-----------------|
+| `/api/*` | API Server | Standard proxy with WebSocket upgrade |
+| `/api/chat/*` | API Server | SSE-specific: no buffering, 1-hour timeouts |
+| `/api/cameras/{id}/stream` | API Server | No buffering, no cache, 24-hour timeouts for long-lived MJPEG streams |
+| `/` | Static files | SPA with `try_files` fallback to `index.html` |
+
 ---
 
 ## Cleanup CronJob Environment Variables
@@ -175,6 +174,22 @@ The cleanup job inherits the same environment as the API server (via ConfigMap):
 |----------|----------|
 | `DATABASE_URL` | Connecting to PostgreSQL to query cameras and fix recordings |
 | `K8S_NAMESPACE` | Namespace to scan for orphaned resources |
+
+---
+
+## File-Server DaemonSet
+
+The file-server runs as a DaemonSet on every node with a dedicated nginx configuration:
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| Image | `nginx:alpine` | Lightweight nginx |
+| Port | `8080` | HTTP port for serving files |
+| Volume | `/data/falcon-eye/recordings` | Mounted read-only as `/recordings` |
+| Tolerations | `operator: Exists` | Runs on all nodes including control-plane |
+| Service | Headless ClusterIP | Individual pods addressable by hostname |
+
+The ConfigMap `file-server-nginx-config` provides the nginx configuration for serving static recording files with autoindex enabled.
 
 ---
 

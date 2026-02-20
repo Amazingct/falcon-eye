@@ -2,11 +2,18 @@
 
 ## Base URL
 
+The API is **internal to the cluster** (ClusterIP) and is accessed through the Dashboard's nginx proxy:
+
 ```
-http://<node-ip>:30901
+http://<node-ip>:30900/api/
 ```
 
-The API is also proxied through the dashboard at `http://<node-ip>:30900/api/`.
+For local development, use `kubectl port-forward`:
+
+```bash
+kubectl port-forward svc/falcon-eye-api 8000:8000 -n falcon-eye
+# Then access at http://localhost:8000
+```
 
 All endpoints return JSON. Request bodies should be `Content-Type: application/json`.
 
@@ -60,16 +67,16 @@ List all cameras with optional filters. Syncs K8s pod status with the database.
       "node_name": "k3s-1",
       "deployment_name": "cam-office-camera",
       "service_name": "svc-office-camera",
-      "stream_port": 30902,
-      "control_port": 30903,
+      "stream_port": 8081,
+      "control_port": 8080,
       "status": "running",
       "resolution": "640x480",
       "framerate": 15,
       "metadata": {},
       "created_at": "2026-02-20T10:00:00",
       "updated_at": "2026-02-20T10:00:30",
-      "stream_url": "http://192.168.1.207:30902",
-      "control_url": "http://192.168.1.207:30903",
+      "stream_url": "/api/cameras/550e8400-e29b-41d4-a716-446655440000/stream",
+      "control_url": null,
       "k8s_status": {
         "ready": true,
         "replicas": 1,
@@ -82,10 +89,12 @@ List all cameras with optional filters. Syncs K8s pod status with the database.
 }
 ```
 
+> **Note**: `stream_url` is a relative path. The browser loads it through the Dashboard, which proxies to the API, which proxies to the internal camera service.
+
 **Example:**
 ```bash
-curl http://192.168.1.207:30901/api/cameras/
-curl http://192.168.1.207:30901/api/cameras/?protocol=usb&status=running
+curl http://localhost:8000/api/cameras/
+curl http://localhost:8000/api/cameras/?protocol=usb&status=running
 ```
 
 ---
@@ -99,8 +108,20 @@ Get a specific camera by UUID.
 **Status Codes:** `200` OK, `404` Camera not found.
 
 ```bash
-curl http://192.168.1.207:30901/api/cameras/550e8400-e29b-41d4-a716-446655440000
+curl http://localhost:8000/api/cameras/550e8400-e29b-41d4-a716-446655440000
 ```
+
+---
+
+### `GET /api/cameras/{camera_id}/stream`
+
+Proxy the camera's MJPEG stream from its internal ClusterIP service. This endpoint relays the continuous `multipart/x-mixed-replace` stream from the camera pod to the browser.
+
+**Response:** `multipart/x-mixed-replace` MJPEG stream (continuous).
+
+**Status Codes:** `200` Streaming, `404` Camera not found, `502` Camera stream unavailable, `503` Camera has no service.
+
+> This endpoint is designed to be used as an `<img>` source in the browser. The Dashboard's nginx has a dedicated location block for this path with 24-hour timeouts to support long-lived streams.
 
 ---
 
@@ -112,19 +133,19 @@ Create a new camera. USB cameras deploy immediately; network cameras are created
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | ✅ | Camera name (1–255 chars) |
-| `protocol` | string | ✅ | `usb`, `rtsp`, `onvif`, or `http` |
+| `name` | string | yes | Camera name (1–255 chars) |
+| `protocol` | string | yes | `usb`, `rtsp`, `onvif`, or `http` |
 | `location` | string | | Physical location description |
-| `source_url` | string | ✅ for network | Stream URL (RTSP/ONVIF/HTTP cameras) |
+| `source_url` | string | yes for network | Stream URL (RTSP/ONVIF/HTTP cameras) |
 | `device_path` | string | | Device path for USB (default: `/dev/video0`) |
-| `node_name` | string | ✅ for USB | K8s node name (required for USB) |
+| `node_name` | string | yes for USB | K8s node name (required for USB) |
 | `resolution` | string | | Resolution (default: `640x480`) |
 | `framerate` | int | | FPS, 1–60 (default: `15`) |
 | `metadata` | object | | Custom key-value metadata |
 
 **Example — USB camera:**
 ```bash
-curl -X POST http://192.168.1.207:30901/api/cameras/ \
+curl -X POST http://localhost:8000/api/cameras/ \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "Office Camera",
@@ -136,7 +157,7 @@ curl -X POST http://192.168.1.207:30901/api/cameras/ \
 
 **Example — RTSP camera:**
 ```bash
-curl -X POST http://192.168.1.207:30901/api/cameras/ \
+curl -X POST http://localhost:8000/api/cameras/ \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "Front Door",
@@ -165,7 +186,7 @@ Update camera fields. If `source_url` changes on a running camera, the deploymen
 | `metadata` | object | Custom metadata |
 
 ```bash
-curl -X PATCH http://192.168.1.207:30901/api/cameras/550e8400-... \
+curl -X PATCH http://localhost:8000/api/cameras/550e8400-... \
   -H 'Content-Type: application/json' \
   -d '{"name": "New Name", "source_url": "rtsp://admin:newpass@192.168.1.100:554/stream1"}'
 ```
@@ -179,7 +200,7 @@ curl -X PATCH http://192.168.1.207:30901/api/cameras/550e8400-... \
 Delete a camera. Runs in the background: deletes K8s resources, marks recordings as orphaned, then removes the DB record.
 
 ```bash
-curl -X DELETE http://192.168.1.207:30901/api/cameras/550e8400-...
+curl -X DELETE http://localhost:8000/api/cameras/550e8400-...
 ```
 
 **Response:**
@@ -199,7 +220,7 @@ curl -X DELETE http://192.168.1.207:30901/api/cameras/550e8400-...
 Start a stopped camera. Creates K8s deployment and recorder.
 
 ```bash
-curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../start
+curl -X POST http://localhost:8000/api/cameras/550e8400-.../start
 ```
 
 **Status Codes:** `200` Starting/already running, `404` Not found, `500` K8s error.
@@ -211,7 +232,7 @@ curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../start
 Stop a running camera. Deletes K8s deployment and recorder.
 
 ```bash
-curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../stop
+curl -X POST http://localhost:8000/api/cameras/550e8400-.../stop
 ```
 
 **Status Codes:** `200` Stopped/already stopped, `404` Not found.
@@ -223,7 +244,7 @@ curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../stop
 Restart a camera by deleting and recreating its K8s resources.
 
 ```bash
-curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../restart
+curl -X POST http://localhost:8000/api/cameras/550e8400-.../restart
 ```
 
 **Status Codes:** `200` Restarted, `404` Not found, `500` K8s error.
@@ -239,12 +260,14 @@ Get stream URLs for a camera.
 {
   "id": "550e8400-...",
   "name": "Office Camera",
-  "stream_url": "http://192.168.1.207:30902",
-  "control_url": "http://192.168.1.207:30903",
+  "stream_url": "/api/cameras/550e8400-.../stream",
+  "control_url": null,
   "protocol": "usb",
   "status": "running"
 }
 ```
+
+> **Note**: `stream_url` is a relative path proxied through the Dashboard and API. `control_url` is `null` since camera services are internal.
 
 ---
 
@@ -292,7 +315,7 @@ Get recording status for a camera. Auto-fixes orphaned recordings if the recorde
 Start recording. Auto-deploys the recorder pod if not already present. Only one active recording per camera is allowed.
 
 ```bash
-curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../recording/start
+curl -X POST http://localhost:8000/api/cameras/550e8400-.../recording/start
 ```
 
 **Status Codes:** `200` Started, `400` Camera not running / no stream port, `409` Already recording, `503` Recorder still deploying.
@@ -304,7 +327,7 @@ curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../recording/start
 Stop the active recording.
 
 ```bash
-curl -X POST http://192.168.1.207:30901/api/cameras/550e8400-.../recording/stop
+curl -X POST http://localhost:8000/api/cameras/550e8400-.../recording/stop
 ```
 
 **Status Codes:** `200` Stopped, `400` No recorder deployed, `503` Recorder still deploying.
@@ -341,6 +364,7 @@ List all recordings.
       "duration_seconds": 900,
       "file_size_bytes": 52428800,
       "status": "completed",
+      "node_name": "k3s-1",
       "error_message": null,
       "camera_deleted": false
     }
@@ -349,9 +373,11 @@ List all recordings.
 }
 ```
 
+> **Note**: `node_name` indicates which cluster node holds the recording file. This is used internally by the file-server DaemonSet for optimized file lookup.
+
 ```bash
-curl http://192.168.1.207:30901/api/recordings/
-curl http://192.168.1.207:30901/api/recordings/?camera_id=550e8400-...&status=completed
+curl http://localhost:8000/api/recordings/
+curl http://localhost:8000/api/recordings/?camera_id=550e8400-...&status=completed
 ```
 
 ---
@@ -372,13 +398,14 @@ Create a recording record (called internally by the recorder service).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | ✅ | Recording ID |
-| `camera_id` | string | ✅ | Camera UUID |
+| `id` | string | yes | Recording ID |
+| `camera_id` | string | yes | Camera UUID |
 | `camera_name` | string | | Camera name (preserved for orphaned recordings) |
-| `file_path` | string | ✅ | Full path to recording file |
-| `file_name` | string | ✅ | Filename only |
-| `start_time` | string | ✅ | ISO 8601 timestamp |
+| `file_path` | string | yes | Full path to recording file |
+| `file_name` | string | yes | Filename only |
+| `start_time` | string | yes | ISO 8601 timestamp |
 | `status` | string | | Default: `recording` |
+| `node_name` | string | | Name of the node where the file is stored |
 
 ---
 
@@ -408,21 +435,21 @@ Delete a recording and optionally its file.
 | `delete_file` | bool | `true` | Also delete the video file from disk |
 
 ```bash
-curl -X DELETE http://192.168.1.207:30901/api/recordings/rec-id-here
+curl -X DELETE http://localhost:8000/api/recordings/rec-id-here
 ```
 
 ---
 
 ### `GET /api/recordings/{recording_id}/download`
 
-Download the recording MP4 file.
+Download the recording MP4 file. The API locates the file across the cluster by querying file-server DaemonSet pods.
 
-**Response:** `video/mp4` file download.
+**Response:** `video/mp4` file download (streamed from the file-server pod that has the file).
 
 **Status Codes:** `200` File served, `404` Recording or file not found.
 
 ```bash
-curl -O http://192.168.1.207:30901/api/recordings/rec-id-here/download
+curl -O http://localhost:8000/api/recordings/rec-id-here/download
 ```
 
 ---
@@ -449,7 +476,7 @@ List all cluster nodes with status, IP, taints, labels, and architecture.
 ```
 
 ```bash
-curl http://192.168.1.207:30901/api/nodes/
+curl http://localhost:8000/api/nodes/
 ```
 
 ---
@@ -502,9 +529,9 @@ Scan cluster nodes for available cameras (USB and optionally network).
 The USB scan connects via SSH to each node and enumerates `/dev/video*` devices. The network scan probes common camera ports (554, 8554, 80, 8080, 8899) across the subnet.
 
 ```bash
-curl http://192.168.1.207:30901/api/nodes/scan/cameras
-curl http://192.168.1.207:30901/api/nodes/scan/cameras?network=true
-curl http://192.168.1.207:30901/api/nodes/scan/cameras?node=k3s-1
+curl http://localhost:8000/api/nodes/scan/cameras
+curl http://localhost:8000/api/nodes/scan/cameras?network=true
+curl http://localhost:8000/api/nodes/scan/cameras?node=k3s-1
 ```
 
 ---
@@ -520,6 +547,8 @@ Get current system settings.
 {
   "default_resolution": "640x480",
   "default_framerate": 15,
+  "default_camera_node": "",
+  "default_recorder_node": "",
   "k8s_namespace": "falcon-eye",
   "cleanup_interval": "*/2 * * * *",
   "creating_timeout_minutes": 3,
@@ -544,13 +573,15 @@ Update settings. Writes to the `falcon-eye-config` ConfigMap. API key is stored 
 |-------|------|-------------|
 | `default_resolution` | string | Default camera resolution |
 | `default_framerate` | int | Default FPS |
+| `default_camera_node` | string | Default node for camera pods (empty = auto-assign) |
+| `default_recorder_node` | string | Default node for recorder pods (empty = auto-assign) |
 | `cleanup_interval` | string | Cron expression for cleanup job |
 | `creating_timeout_minutes` | int | Timeout for stuck cameras |
 | `anthropic_api_key` | string | Anthropic API key (validated before saving) |
 | `chatbot_tools` | string[] | List of enabled chatbot tools |
 
 ```bash
-curl -X PATCH http://192.168.1.207:30901/api/settings/ \
+curl -X PATCH http://localhost:8000/api/settings/ \
   -H 'Content-Type: application/json' \
   -d '{"default_resolution": "1280x720", "default_framerate": 30}'
 ```
@@ -564,7 +595,7 @@ curl -X PATCH http://192.168.1.207:30901/api/settings/ \
 Restart all Falcon-Eye deployments (API, dashboard, camera pods) and update CronJob schedule.
 
 ```bash
-curl -X POST http://192.168.1.207:30901/api/settings/restart-all
+curl -X POST http://localhost:8000/api/settings/restart-all
 ```
 
 **Response:**
@@ -582,7 +613,7 @@ curl -X POST http://192.168.1.207:30901/api/settings/restart-all
 Delete ALL cameras from database and K8s. **Destructive — cannot be undone.**
 
 ```bash
-curl -X DELETE http://192.168.1.207:30901/api/settings/cameras/all
+curl -X DELETE http://localhost:8000/api/settings/cameras/all
 ```
 
 **Response:**
