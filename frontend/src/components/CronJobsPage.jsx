@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Clock, Plus, Trash2, Play, Edit, RefreshCw, Loader2, AlertCircle, CheckCircle, X } from 'lucide-react'
+import CronExpressionBuilder, { describeCron } from './CronExpressionBuilder'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -164,7 +165,10 @@ export default function CronJobsPage() {
                   </td>
                   <td className="px-4 py-3 text-gray-400 text-sm">{getAgentName(job.agent_id)}</td>
                   <td className="px-4 py-3">
-                    <code className="text-sm bg-gray-700 px-2 py-1 rounded font-mono">{job.cron_expr}</code>
+                    <div>
+                      <span className="text-sm text-gray-200">{describeCron(job.cron_expr)}</span>
+                      <code className="block text-xs text-gray-500 font-mono mt-0.5">{job.cron_expr}</code>
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <button onClick={() => toggleEnabled(job)} className="relative">
@@ -250,7 +254,7 @@ function CronJobModal({ job, agents, onClose, onSave }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-lg w-full max-w-md mx-4 border border-gray-700">
+      <div className="bg-gray-800 rounded-lg w-full max-w-lg mx-4 border border-gray-700">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
           <h2 className="text-lg font-semibold">{isEdit ? 'Edit Cron Job' : 'Create Cron Job'}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white">×</button>
@@ -273,11 +277,10 @@ function CronJobModal({ job, agents, onClose, onSave }) {
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">Cron Expression</label>
-            <input type="text" value={form.cron_expr} onChange={e => setForm({ ...form, cron_expr: e.target.value })} placeholder="0 * * * *" className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono" required />
-            <p className="text-xs text-gray-500 mt-1">min hour dom month dow (e.g. "0 9 * * 1" = every Monday 9am)</p>
-          </div>
+          <CronExpressionBuilder
+            value={form.cron_expr}
+            onChange={cron_expr => setForm(f => ({ ...f, cron_expr }))}
+          />
 
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">Prompt</label>

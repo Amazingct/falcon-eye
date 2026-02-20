@@ -4,6 +4,7 @@ import AgentsPage from './components/AgentsPage'
 import CronJobsPage from './components/CronJobsPage'
 import AgentChat from './components/AgentChat'
 import AgentDetailPage from './components/AgentDetailPage'
+import CronExpressionBuilder from './components/CronExpressionBuilder'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -1604,17 +1605,10 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                   <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
                     <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">System Timers</h3>
                     <div className="space-y-5">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-2">Cleanup Interval</label>
-                        <input
-                          type="text"
-                          value={form.cleanup_interval}
-                          onChange={e => setForm({ ...form, cleanup_interval: e.target.value })}
-                          placeholder="*/10 * * * *"
-                          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 font-mono text-sm"
-                        />
-                        <p className="text-xs text-gray-500 mt-1.5">Cron expression for orphan pod cleanup. Default: every 10 minutes.</p>
-                      </div>
+                      <CronExpressionBuilder
+                        value={form.cleanup_interval}
+                        onChange={cleanup_interval => setForm(f => ({ ...f, cleanup_interval }))}
+                      />
                       <div>
                         <label className="block text-sm font-medium text-gray-300 mb-2">Creating Timeout (minutes)</label>
                         <input
