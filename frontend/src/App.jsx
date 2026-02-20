@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight, Key, Server, Bot, ArrowLeft, AlertTriangle, Network } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
@@ -334,14 +334,101 @@ function App() {
 }
 
 // Camera Grid Component
+const MAX_SPAN = 3
+const ROW_HEIGHT = 280
+const GAP = 16
+
+function loadGridSizes() {
+  try {
+    return JSON.parse(localStorage.getItem('falcon-eye-grid-sizes') || '{}')
+  } catch { return {} }
+}
+
+function saveGridSizes(sizes) {
+  localStorage.setItem('falcon-eye-grid-sizes', JSON.stringify(sizes))
+}
+
 function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, onError }) {
-  const [recordingStatus, setRecordingStatus] = useState({}) // camera_id -> { recording: bool }
-  
+  const [recordingStatus, setRecordingStatus] = useState({})
+  const [cardSizes, setCardSizes] = useState(loadGridSizes)
+  const [dragging, setDragging] = useState(null)
+  const gridRef = useRef(null)
+
   const isDeleting = (camera) => camera.status === 'deleting'
   const isCreating = (camera) => camera.status === 'creating' || camera.status === 'pending'
   const isBusy = (camera) => isDeleting(camera) || isCreating(camera)
-  
-  // Fetch recording status for running cameras
+
+  const getSizeFor = (cameraId) => {
+    const s = cardSizes[cameraId]
+    return s ? { cols: s.cols || 1, rows: s.rows || 1 } : { cols: 1, rows: 1 }
+  }
+
+  const getColWidth = useCallback(() => {
+    if (!gridRef.current) return 200
+    const style = getComputedStyle(gridRef.current)
+    const cols = style.gridTemplateColumns.split(' ').length
+    const gridW = gridRef.current.clientWidth
+    return (gridW - GAP * (cols - 1)) / cols
+  }, [])
+
+  const getMaxCols = useCallback(() => {
+    if (!gridRef.current) return 4
+    return getComputedStyle(gridRef.current).gridTemplateColumns.split(' ').length
+  }, [])
+
+  const handleResizeStart = useCallback((e, cameraId) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const cardEl = e.target.closest('[data-card-id]')
+    if (!cardEl) return
+    const rect = cardEl.getBoundingClientRect()
+    setDragging({ cameraId, startX: rect.left, startY: rect.top })
+  }, [])
+
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (e) => {
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY
+      const colW = getColWidth()
+      const cellH = ROW_HEIGHT + GAP
+      const dx = clientX - dragging.startX
+      const dy = clientY - dragging.startY
+      const cols = Math.max(1, Math.min(MAX_SPAN, getMaxCols(), Math.round(dx / (colW + GAP)) + 1))
+      const rows = Math.max(1, Math.min(MAX_SPAN, Math.round(dy / cellH) + 1))
+      setCardSizes(prev => {
+        const cur = prev[dragging.cameraId]
+        if (cur && cur.cols === cols && cur.rows === rows) return prev
+        return { ...prev, [dragging.cameraId]: { cols, rows } }
+      })
+    }
+    const onUp = () => {
+      setCardSizes(prev => { saveGridSizes(prev); return prev })
+      setDragging(null)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
+    }
+  }, [dragging, getColWidth, getMaxCols])
+
+  const resetSize = useCallback((cameraId, e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCardSizes(prev => {
+      const updated = { ...prev }
+      delete updated[cameraId]
+      saveGridSizes(updated)
+      return updated
+    })
+  }, [])
+
   useEffect(() => {
     const fetchRecordingStatus = async () => {
       const runningCameras = cameras.filter(c => c.status === 'running')
@@ -358,10 +445,10 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
       }
     }
     fetchRecordingStatus()
-    const interval = setInterval(fetchRecordingStatus, 10000) // Check every 10s
+    const interval = setInterval(fetchRecordingStatus, 10000)
     return () => clearInterval(interval)
   }, [cameras])
-  
+
   const startRecording = async (camera) => {
     try {
       const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/start`, { method: 'POST' })
@@ -369,14 +456,13 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
       if (res.ok) {
         setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
       } else {
-        const errorMsg = data.detail || data.message || 'Failed to start recording'
-        onError(errorMsg)
+        onError(data.detail || data.message || 'Failed to start recording')
       }
     } catch (e) {
       onError(`Failed to start recording: ${e.message}`)
     }
   }
-  
+
   const stopRecording = async (camera) => {
     try {
       const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/stop`, { method: 'POST' })
@@ -384,24 +470,28 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
       if (res.ok) {
         setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
       } else {
-        const errorMsg = data.detail || data.message || 'Failed to stop recording'
-        onError(errorMsg)
+        onError(data.detail || data.message || 'Failed to stop recording')
       }
     } catch (e) {
       onError(`Failed to stop recording: ${e.message}`)
     }
   }
-  
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-      {cameras.map(camera => (
+    <div ref={gridRef} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4" style={{ gridAutoRows: `${ROW_HEIGHT}px` }}>
+      {cameras.map(camera => {
+        const size = getSizeFor(camera.id)
+        const isLarge = size.rows > 1 || size.cols > 1
+        return (
         <div
           key={camera.id}
-          className={`bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition h-[280px] flex flex-col ${isBusy(camera) ? 'opacity-75' : ''}`}
+          data-card-id={camera.id}
+          style={{ gridColumn: `span ${size.cols}`, gridRow: `span ${size.rows}` }}
+          className={`bg-gray-800 rounded-lg overflow-hidden border border-gray-700 hover:border-gray-600 transition-colors flex flex-col relative ${isBusy(camera) ? 'opacity-75' : ''} ${dragging?.cameraId === camera.id ? 'ring-2 ring-blue-500 z-10' : ''}`}
         >
           {/* Stream Preview */}
           <div
-            className="h-[160px] bg-gray-900 relative cursor-pointer flex-shrink-0"
+            className={`${isLarge ? 'flex-1' : 'h-[160px] flex-shrink-0'} bg-gray-900 relative cursor-pointer min-h-[120px]`}
             onClick={() => !isBusy(camera) && onSelect(camera)}
           >
             {camera.status === 'running' ? (
@@ -433,8 +523,8 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
                 <p className="text-sm text-red-400 font-medium">Error</p>
                 {camera.metadata?.error && (
                   <p className="text-xs text-red-300/80 mt-1 px-2 max-w-full break-words" title={camera.metadata.error}>
-                    {camera.metadata.error.length > 80 
-                      ? camera.metadata.error.substring(0, 80) + '...' 
+                    {camera.metadata.error.length > 80
+                      ? camera.metadata.error.substring(0, 80) + '...'
                       : camera.metadata.error}
                   </p>
                 )}
@@ -446,7 +536,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
             )}
             {/* Status Badge */}
             <div className={`absolute top-2 right-2 px-2 py-1 rounded text-xs font-medium flex items-center space-x-1 ${
-              camera.status === 'running' 
+              camera.status === 'running'
                 ? 'bg-green-500/20 text-green-400'
                 : isCreating(camera)
                 ? 'bg-blue-500/20 text-blue-400'
@@ -458,26 +548,33 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
             }`}>
               {isBusy(camera) && <Loader2 className="h-3 w-3 animate-spin" />}
               <span>
-                {camera.status === 'running' ? 'LIVE' : 
+                {camera.status === 'running' ? 'LIVE' :
                  isCreating(camera) ? 'ADDING...' :
                  camera.status === 'deleting' ? 'DELETING...' :
                  camera.status === 'stopped' ? 'STOPPED' : 'ERROR'}
               </span>
             </div>
           </div>
-          
+
           {/* Camera Info */}
-          <div className="p-3 flex-1 flex flex-col">
+          <div className="p-3 flex flex-col">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold truncate">{camera.name}</h3>
-              <span className="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded uppercase">
-                {camera.protocol}
-              </span>
+              <div className="flex items-center space-x-2 flex-shrink-0">
+                {isLarge && (
+                  <button onClick={(e) => resetSize(camera.id, e)} className="text-[10px] text-gray-500 hover:text-gray-300 font-mono" title="Reset to 1×1">
+                    {size.cols}×{size.rows} ✕
+                  </button>
+                )}
+                <span className="text-xs text-gray-400 bg-gray-700 px-2 py-1 rounded uppercase">
+                  {camera.protocol}
+                </span>
+              </div>
             </div>
-            <p className="text-sm text-gray-400 truncate flex-1">{camera.node_name}</p>
-            
+            <p className="text-sm text-gray-400 truncate">{camera.node_name}</p>
+
             {/* Actions */}
-            <div className="flex items-center justify-between mt-auto pt-2">
+            <div className="flex items-center justify-between mt-2 pt-2">
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => onToggle(camera)}
@@ -508,7 +605,6 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
                 >
                   <Edit className="h-4 w-4" />
                 </button>
-                {/* Recording buttons - only for running cameras */}
                 {camera.status === 'running' && (
                   recordingStatus[camera.id]?.status === 'recording' ? (
                     <button
@@ -539,8 +635,21 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
               </button>
             </div>
           </div>
+
+          {/* Drag resize handle — bottom-right corner */}
+          <div
+            onPointerDown={(e) => handleResizeStart(e, camera.id)}
+            className="absolute bottom-0 right-0 w-5 h-5 cursor-nwse-resize group touch-none"
+            title="Drag to resize"
+          >
+            <svg viewBox="0 0 20 20" className="w-full h-full text-gray-600 group-hover:text-blue-400 transition-colors">
+              <path d="M14 20L20 14" stroke="currentColor" strokeWidth="2" />
+              <path d="M10 20L20 10" stroke="currentColor" strokeWidth="2" />
+              <path d="M6 20L20 6" stroke="currentColor" strokeWidth="2" />
+            </svg>
+          </div>
         </div>
-      ))}
+      )})}
     </div>
   )
 }
