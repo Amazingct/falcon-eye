@@ -21,11 +21,12 @@ class RecordingCreate(BaseModel):
     """Create recording request (from recorder service)"""
     id: str
     camera_id: str
-    camera_name: Optional[str] = None  # Preserved for when camera is deleted
+    camera_name: Optional[str] = None
     file_path: str
     file_name: str
     start_time: str
     status: str = "recording"
+    node_name: Optional[str] = None  # K8s node where file is stored
 
 
 class RecordingUpdate(BaseModel):
@@ -49,7 +50,8 @@ class RecordingResponse(BaseModel):
     file_size_bytes: Optional[int] = None
     status: str
     error_message: Optional[str] = None
-    camera_deleted: bool = False  # True if associated camera was deleted
+    node_name: Optional[str] = None
+    camera_deleted: bool = False
     
     class Config:
         from_attributes = True
@@ -117,11 +119,12 @@ async def create_recording(
     recording = Recording(
         id=data.id,
         camera_id=camera_uuid,
-        camera_name=data.camera_name,  # Preserve camera name for when camera is deleted
+        camera_name=data.camera_name,
         file_path=data.file_path,
         file_name=data.file_name,
         start_time=datetime.fromisoformat(data.start_time),
         status=RecordingStatus(data.status),
+        node_name=data.node_name,
     )
     
     db.add(recording)
@@ -211,26 +214,48 @@ async def delete_recording(
     return {"message": "Recording deleted", "id": recording_id}
 
 
-async def _find_file_via_recorders(camera_id: str, file_name: str) -> Optional[str]:
-    """Search all recorder pods for a recording file. Returns the URL if found."""
+async def _find_file_on_cluster(
+    camera_id: str,
+    file_name: str,
+    hint_node: Optional[str] = None,
+) -> Optional[str]:
+    """Locate a recording file across the cluster via the file-server DaemonSet.
+    
+    The file-server DaemonSet runs on every node, mounting the local hostPath.
+    If hint_node is provided, we try that node's pod first (O(1) best case).
+    Otherwise we check all file-server pods.
+    """
     settings = get_settings()
+    file_path = f"/{camera_id}/{file_name}"
+
     try:
         from app.services.k8s import core_api
-        services = core_api.list_namespaced_service(
+        pods = core_api.list_namespaced_pod(
             namespace=settings.k8s_namespace,
-            label_selector="component=recorder",
+            label_selector="app=falcon-eye,component=file-server",
         )
-        for svc in services.items:
-            svc_url = f"http://{svc.metadata.name}.{settings.k8s_namespace}.svc.cluster.local:8080"
-            try:
-                async with httpx.AsyncClient(timeout=5) as client:
-                    res = await client.head(f"{svc_url}/files/{camera_id}/{file_name}")
+        if not pods.items:
+            return None
+
+        # Sort so the hint node's pod is checked first
+        pod_list = list(pods.items)
+        if hint_node:
+            pod_list.sort(key=lambda p: 0 if p.spec.node_name == hint_node else 1)
+
+        async with httpx.AsyncClient(timeout=5) as client:
+            for pod in pod_list:
+                pod_ip = pod.status.pod_ip
+                if not pod_ip:
+                    continue
+                try:
+                    url = f"http://{pod_ip}:8080{file_path}"
+                    res = await client.head(url)
                     if res.status_code == 200:
-                        return f"{svc_url}/files/{camera_id}/{file_name}"
-            except Exception:
-                continue
+                        return url
+                except Exception:
+                    continue
     except Exception as e:
-        print(f"Error searching recorder pods: {e}")
+        print(f"Error searching file-server pods: {e}")
     return None
 
 
@@ -242,8 +267,8 @@ async def download_recording(
     """Download a recording file.
     
     Strategy:
-    1. Try serving from local volume (works when API and recorder share a node)
-    2. Proxy through the recorder pod that has the file (multi-node)
+    1. Try serving from local volume (works when API shares a node with the file)
+    2. Locate the file via the file-server DaemonSet and stream it back
     """
     result = await db.execute(
         select(Recording).where(Recording.id == recording_id)
@@ -264,30 +289,33 @@ async def download_recording(
             filename=recording.file_name,
         )
     
-    # 2. File not on this node — proxy through a recorder pod that has it
+    # 2. File not on this node — locate it via the file-server DaemonSet
     camera_id = str(recording.camera_id) if recording.camera_id else None
     if not camera_id or not recording.file_name:
         raise HTTPException(
             status_code=404,
-            detail="Recording file not found on this node and cannot locate it remotely"
+            detail="Recording file not found on this node and cannot locate it remotely",
         )
     
-    remote_url = await _find_file_via_recorders(camera_id, recording.file_name)
+    remote_url = await _find_file_on_cluster(
+        camera_id,
+        recording.file_name,
+        hint_node=getattr(recording, "node_name", None),
+    )
     if not remote_url:
         raise HTTPException(
             status_code=404,
-            detail="Recording file not found on any node. The recorder pod may have been restarted."
+            detail="Recording file not found on any node",
         )
     
-    # Stream the file from the recorder pod back to the client
-    async def stream_from_recorder():
+    async def _stream():
         async with httpx.AsyncClient(timeout=300) as client:
-            async with client.stream("GET", remote_url) as response:
-                async for chunk in response.aiter_bytes(chunk_size=65536):
+            async with client.stream("GET", remote_url) as resp:
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
                     yield chunk
 
     return StreamingResponse(
-        stream_from_recorder(),
+        _stream(),
         media_type="video/mp4",
         headers={
             "Content-Disposition": f'attachment; filename="{recording.file_name}"',

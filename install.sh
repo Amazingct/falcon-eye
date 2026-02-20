@@ -76,7 +76,7 @@ setup_kubeconfig() {
 
 # Check prerequisites
 check_prerequisites() {
-    echo -e "${YELLOW}[1/8] Checking prerequisites...${NC}"
+    echo -e "${YELLOW}[1/9] Checking prerequisites...${NC}"
     
     # Check for kubectl
     if ! command -v kubectl &> /dev/null; then
@@ -159,7 +159,7 @@ check_prerequisites() {
 
 # Check for existing installation
 check_existing() {
-    echo -e "${YELLOW}[2/8] Checking for existing installation...${NC}"
+    echo -e "${YELLOW}[2/9] Checking for existing installation...${NC}"
     
     if kubectl get namespace ${NAMESPACE} &> /dev/null; then
         if kubectl get deployment falcon-eye-api -n ${NAMESPACE} &> /dev/null; then
@@ -179,20 +179,35 @@ check_existing() {
     fi
 }
 
-# Detect cluster nodes
+# Detect cluster nodes and identify the master
 detect_nodes() {
-    echo -e "${YELLOW}[3/8] Detecting cluster nodes...${NC}"
+    echo -e "${YELLOW}[3/9] Detecting cluster nodes...${NC}"
     
     NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
     echo -e "${GREEN}✓ Found ${NODE_COUNT} node(s)${NC}"
+    
+    # Detect master/control-plane node
+    MASTER_NODE=$(kubectl get nodes -l 'node-role.kubernetes.io/control-plane' --no-headers -o custom-columns=":metadata.name" 2>/dev/null | head -1)
+    if [ -z "$MASTER_NODE" ]; then
+        MASTER_NODE=$(kubectl get nodes -l 'node-role.kubernetes.io/master' --no-headers -o custom-columns=":metadata.name" 2>/dev/null | head -1)
+    fi
+    if [ -z "$MASTER_NODE" ]; then
+        # Fallback: first node in the cluster
+        MASTER_NODE=$(kubectl get nodes --no-headers -o custom-columns=":metadata.name" 2>/dev/null | head -1)
+    fi
     
     echo ""
     kubectl get nodes -o wide --no-headers | while read line; do
         NODE_NAME=$(echo $line | awk '{print $1}')
         NODE_STATUS=$(echo $line | awk '{print $2}')
         NODE_IP=$(echo $line | awk '{print $6}')
-        echo -e "  • ${NODE_NAME} (${NODE_STATUS}) - ${NODE_IP}"
+        MARKER=""
+        [ "$NODE_NAME" = "$MASTER_NODE" ] && MARKER=" ${CYAN}(master)${NC}"
+        echo -e "  • ${NODE_NAME} (${NODE_STATUS}) - ${NODE_IP}${MARKER}"
     done
+    echo ""
+    
+    echo -e "  Master node: ${CYAN}${MASTER_NODE}${NC}"
     echo ""
 }
 
@@ -217,12 +232,19 @@ select_node() {
 
 # Prompt for optional configuration
 configure_options() {
-    # Skip prompts if running non-interactively or upgrading
+    # Non-interactive or upgrade: let Kubernetes scheduler decide placement
     if [ ! -t 0 ] || [ "$IS_UPGRADE" = true ]; then
+        POSTGRES_NODE=""
+        API_NODE=""
+        DASHBOARD_NODE=""
+        CAMERA_NODE=""
+        RECORDER_NODE=""
+        ANTHROPIC_API_KEY=""
+        echo -e "${GREEN}  Auto-configured: Kubernetes scheduler will place all components${NC}"
         return
     fi
     
-    echo -e "${YELLOW}[3.5/8] Optional Configuration...${NC}"
+    echo -e "${YELLOW}[3.5/9] Optional Configuration...${NC}"
     echo ""
     
     # Get nodes and display options
@@ -249,7 +271,19 @@ configure_options() {
         select_node "API Server" "Backend service" "API_NODE"
         select_node "Dashboard" "Web UI" "DASHBOARD_NODE"
         select_node "Camera Streams" "Default node for camera pods" "CAMERA_NODE"
-        select_node "Recordings" "Default node for recorder pods" "RECORDER_NODE"
+        
+        echo -e "  ${CYAN}Recordings${NC} - Default node for recorder pods"
+        echo -e "  ${YELLOW}Tip: Pin to one node to centralize all recordings on a single disk${NC}"
+        read -p "  Choose node [0-${NODE_COUNT}] (default: 0 = auto): " NODE_CHOICE
+        
+        if [ -n "$NODE_CHOICE" ] && [ "$NODE_CHOICE" != "0" ] && [ "$NODE_CHOICE" -le "$NODE_COUNT" ] 2>/dev/null; then
+            RECORDER_NODE="${NODES[$((NODE_CHOICE-1))]}"
+            echo -e "${GREEN}  ✓ Recordings: ${RECORDER_NODE}${NC}"
+        else
+            RECORDER_NODE=""
+            echo -e "${GREEN}  ✓ Recordings: auto-assigned${NC}"
+        fi
+        echo ""
         
     else
         POSTGRES_NODE=""
@@ -278,7 +312,7 @@ configure_options() {
 
 # Create namespace
 create_namespace() {
-    echo -e "${YELLOW}[4/8] Setting up namespace '${NAMESPACE}'...${NC}"
+    echo -e "${YELLOW}[4/9] Setting up namespace '${NAMESPACE}'...${NC}"
     
     if kubectl get namespace ${NAMESPACE} &> /dev/null; then
         echo -e "${GREEN}✓ Namespace '${NAMESPACE}' exists${NC}"
@@ -290,7 +324,7 @@ create_namespace() {
 
 # Deploy PostgreSQL
 deploy_database() {
-    echo -e "${YELLOW}[5/8] Deploying PostgreSQL database...${NC}"
+    echo -e "${YELLOW}[5/9] Deploying PostgreSQL database...${NC}"
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
@@ -370,7 +404,7 @@ EOF
 
 # Deploy Falcon-Eye backend
 deploy_backend() {
-    echo -e "${YELLOW}[6/8] Deploying Falcon-Eye API...${NC}"
+    echo -e "${YELLOW}[6/9] Deploying Falcon-Eye API...${NC}"
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
@@ -496,7 +530,7 @@ EOF
 
 # Deploy frontend
 deploy_frontend() {
-    echo -e "${YELLOW}[7/8] Deploying Falcon-Eye Dashboard...${NC}"
+    echo -e "${YELLOW}[7/9] Deploying Falcon-Eye Dashboard...${NC}"
     
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
@@ -553,9 +587,102 @@ EOF
     fi
 }
 
+# Deploy file-server DaemonSet (serves recordings from every node)
+deploy_file_server() {
+    echo -e "${YELLOW}[8/9] Deploying recordings file-server...${NC}"
+    
+    cat <<'NGINXEOF' | kubectl apply -n ${NAMESPACE} -f - >/dev/null 2>&1 || true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: file-server-nginx-config
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        root /recordings;
+        location / {
+            autoindex on;
+            autoindex_format json;
+        }
+    }
+NGINXEOF
+
+    cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falcon-eye-file-server
+  labels:
+    app: falcon-eye
+    component: file-server
+spec:
+  selector:
+    matchLabels:
+      app: falcon-eye
+      component: file-server
+  template:
+    metadata:
+      labels:
+        app: falcon-eye
+        component: file-server
+    spec:
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
+          readOnly: true
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+      volumes:
+      - name: recordings
+        hostPath:
+          path: /data/falcon-eye/recordings
+          type: DirectoryOrCreate
+      - name: nginx-config
+        configMap:
+          name: file-server-nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: falcon-eye-file-server
+  labels:
+    app: falcon-eye
+    component: file-server
+spec:
+  clusterIP: None
+  selector:
+    app: falcon-eye
+    component: file-server
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+EOF
+    
+    echo -e "${GREEN}✓ File-server DaemonSet configured (runs on every node)${NC}"
+}
+
 # Deploy cleanup CronJob
 deploy_cleanup_cronjob() {
-    echo -e "${YELLOW}[8/8] Deploying cleanup CronJob...${NC}"
+    echo -e "${YELLOW}[9/9] Deploying cleanup CronJob...${NC}"
     
     # Get cleanup interval from ConfigMap or use default (every 2 minutes)
     CLEANUP_INTERVAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLEANUP_INTERVAL}' 2>/dev/null)
@@ -765,6 +892,7 @@ main() {
     deploy_database
     deploy_backend
     deploy_frontend
+    deploy_file_server
     deploy_cleanup_cronjob
     wait_for_rollout
     print_access_info

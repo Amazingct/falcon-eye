@@ -23,6 +23,7 @@ STREAM_URL = os.getenv("STREAM_URL", "")  # HLS or RTSP URL to record from
 RECORDINGS_PATH = os.getenv("RECORDINGS_PATH", "/recordings")
 API_URL = os.getenv("API_URL", "http://falcon-eye-api:3000")  # Main API to report recordings
 SEGMENT_DURATION = int(os.getenv("SEGMENT_DURATION", "3600"))  # Max segment duration in seconds (1 hour)
+NODE_NAME = os.getenv("NODE_NAME", "")  # K8s node this pod runs on (from downward API)
 
 # Recording state
 current_process: Optional[subprocess.Popen] = None
@@ -68,15 +69,18 @@ async def notify_api_start(recording_id: str, file_path: str, file_name: str, st
     """Notify main API that recording started"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(f"{API_URL}/api/recordings/", json={
+            payload = {
                 "id": recording_id,
                 "camera_id": CAMERA_ID,
-                "camera_name": CAMERA_NAME,  # Preserve camera name for when camera is deleted
+                "camera_name": CAMERA_NAME,
                 "file_path": file_path,
                 "file_name": file_name,
                 "start_time": start_time.isoformat(),
                 "status": "recording",
-            })
+            }
+            if NODE_NAME:
+                payload["node_name"] = NODE_NAME
+            await client.post(f"{API_URL}/api/recordings/", json=payload)
     except Exception as e:
         print(f"Failed to notify API of recording start: {e}")
 

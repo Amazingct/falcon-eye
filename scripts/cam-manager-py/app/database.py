@@ -35,9 +35,22 @@ SyncSessionLocal = sessionmaker(bind=sync_engine)
 
 
 async def init_db():
-    """Initialize database tables"""
+    """Initialize database tables and run lightweight migrations"""
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    # Add columns that may not exist in older databases
+    async with async_engine.begin() as conn:
+        from sqlalchemy import text
+        migrations = [
+            "ALTER TABLE recordings ADD COLUMN IF NOT EXISTS node_name VARCHAR",
+        ]
+        for sql in migrations:
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                pass
+    
     print("Database initialized")
 
 

@@ -158,6 +158,12 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
                             {"name": "STREAM_URL", "value": stream_url},
                             {"name": "API_URL", "value": "http://falcon-eye-api:8000"},
                             {"name": "RECORDINGS_PATH", "value": "/recordings"},
+                            {
+                                "name": "NODE_NAME",
+                                "valueFrom": {
+                                    "fieldRef": {"fieldPath": "spec.nodeName"},
+                                },
+                            },
                         ],
                         "volumeMounts": [{
                             "name": "recordings",

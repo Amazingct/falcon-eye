@@ -33,6 +33,7 @@ class Recording(Base):
     file_size_bytes = Column(Integer, nullable=True)  # File size
     status = Column(SQLEnum(RecordingStatus), default=RecordingStatus.RECORDING)
     error_message = Column(String, nullable=True)
+    node_name = Column(String, nullable=True)  # K8s node where the recording was stored
     camera_deleted = Column(Boolean, default=False, nullable=False)  # True if associated camera was deleted
     
     # Relationship to camera (nullable - camera may be deleted)
@@ -51,5 +52,6 @@ class Recording(Base):
             "file_size_bytes": self.file_size_bytes,
             "status": self.status.value if self.status else None,
             "error_message": self.error_message,
+            "node_name": self.node_name,
             "camera_deleted": self.camera_deleted,
         }

@@ -1,0 +1,27 @@
+---
+description: Design all features generically — never assume a specific deployment, cluster topology, or infrastructure
+alwaysApply: true
+---
+
+# Generic Design Principle
+
+Falcon-Eye is deployed across diverse Kubernetes environments. Every feature, default, and architecture decision must work generically.
+
+## Target Environments
+
+All code must work on:
+- Single-node clusters (Docker Desktop, minikube, kind)
+- Multi-node bare metal (k3s, kubeadm)
+- Cloud-managed K8s (GKE, EKS, AKS)
+- ARM and x86 nodes (Jetson, Raspberry Pi, standard servers)
+- Clusters with tainted master/control-plane nodes
+
+## Rules
+
+- **No hardcoded node assumptions**: Never default components to "master node" or any specific node. Let the K8s scheduler decide unless the user explicitly configures otherwise.
+- **No infrastructure dependencies**: Don't assume NFS, shared storage, or specific CSI drivers are available. `hostPath` is the baseline; use DaemonSets to bridge node-local storage gaps.
+- **Tolerate all taints on DaemonSets**: System-level DaemonSets (e.g., file-server) must use `tolerations: [operator: Exists]` to run on every node including tainted control-plane nodes.
+- **Use standard public images where possible**: Prefer `nginx:alpine`, `postgres:15-alpine`, etc. over custom images when the task doesn't require custom code. These are multi-arch and universally available.
+- **Don't assume cluster labels exist**: Not all clusters label master nodes with `node-role.kubernetes.io/control-plane`. Always have fallbacks.
+- **Empty string = auto**: For node selectors and configuration, treat empty/unset values as "let Kubernetes decide" rather than defaulting to a detected node.
+- **Graceful degradation**: If an optional component (DaemonSet, service) isn't deployed yet, the system should return clear errors rather than crash.
