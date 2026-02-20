@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight } from 'lucide-react'
+import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight, Key, Server, Bot, ArrowLeft, AlertTriangle, Network } from 'lucide-react'
 
 const API_URL = window.API_URL || '/api'
 
@@ -13,7 +13,6 @@ function App() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(null) // camera to edit
   const [showScanModal, setShowScanModal] = useState(false)
-  const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [selectedCamera, setSelectedCamera] = useState(null)
   const [showChat, setShowChat] = useState(false)
   const [chatDocked, setChatDocked] = useState(true)
@@ -165,8 +164,8 @@ function App() {
                 <span>Add Camera</span>
               </button>
               <button
-                onClick={() => setShowSettingsModal(true)}
-                className="p-2 hover:bg-gray-700 rounded-lg transition"
+                onClick={() => setCurrentPage(currentPage === 'settings' ? 'cameras' : 'settings')}
+                className={`p-2 hover:bg-gray-700 rounded-lg transition ${currentPage === 'settings' ? 'text-blue-400 bg-gray-700' : ''}`}
                 title="Settings"
               >
                 <Settings className="h-5 w-5" />
@@ -176,93 +175,104 @@ function App() {
         </div>
       </header>
 
-      {/* Stats Bar */}
-      <div className="bg-gray-800/50 border-b border-gray-700">
-        <div className="max-w-7xl mx-auto px-4 py-3">
-          <div className="flex items-center space-x-8">
-            <div className="flex items-center space-x-2">
-              <Camera className="h-4 w-4 text-gray-400" />
-              <span className="text-sm text-gray-400">Total:</span>
-              <span className="font-semibold">{cameras.length}</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <CheckCircle className="h-4 w-4 text-green-500" />
-              <span className="text-sm text-gray-400">Online:</span>
-              <span className="font-semibold text-green-500">
-                {cameras.filter(c => c.status === 'running').length}
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <AlertCircle className="h-4 w-4 text-red-500" />
-              <span className="text-sm text-gray-400">Offline:</span>
-              <span className="font-semibold text-red-500">
-                {cameras.filter(c => c.status !== 'running').length}
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Wifi className="h-4 w-4 text-blue-400" />
-              <span className="text-sm text-gray-400">Nodes:</span>
-              <span className="font-semibold">{nodes.length}</span>
+      {currentPage === 'settings' ? (
+        <SettingsPage
+          nodes={nodes}
+          onBack={() => setCurrentPage('cameras')}
+          onClearAll={() => {
+            setCurrentPage('cameras')
+            fetchCameras()
+          }}
+        />
+      ) : (
+        <>
+          {/* Stats Bar */}
+          <div className="bg-gray-800/50 border-b border-gray-700">
+            <div className="max-w-7xl mx-auto px-4 py-3">
+              <div className="flex items-center space-x-8">
+                <div className="flex items-center space-x-2">
+                  <Camera className="h-4 w-4 text-gray-400" />
+                  <span className="text-sm text-gray-400">Total:</span>
+                  <span className="font-semibold">{cameras.length}</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <span className="text-sm text-gray-400">Online:</span>
+                  <span className="font-semibold text-green-500">
+                    {cameras.filter(c => c.status === 'running').length}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="h-4 w-4 text-red-500" />
+                  <span className="text-sm text-gray-400">Offline:</span>
+                  <span className="font-semibold text-red-500">
+                    {cameras.filter(c => c.status !== 'running').length}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Wifi className="h-4 w-4 text-blue-400" />
+                  <span className="text-sm text-gray-400">Nodes:</span>
+                  <span className="font-semibold">{nodes.length}</span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {error && (
-          <div className="bg-red-500/20 border border-red-500 text-red-400 px-4 py-3 rounded-lg mb-6 flex items-center justify-between animate-pulse">
-            <div className="flex items-center space-x-2">
-              <AlertCircle className="h-5 w-5 flex-shrink-0" />
-              <span>{error}</span>
-            </div>
-            <button onClick={() => setError(null)} className="text-red-300 hover:text-white ml-4">×</button>
-          </div>
-        )}
+          {/* Main Content */}
+          <main className="max-w-7xl mx-auto px-4 py-6">
+            {error && (
+              <div className="bg-red-500/20 border border-red-500 text-red-400 px-4 py-3 rounded-lg mb-6 flex items-center justify-between animate-pulse">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="h-5 w-5 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
+                <button onClick={() => setError(null)} className="text-red-300 hover:text-white ml-4">×</button>
+              </div>
+            )}
 
-        {currentPage === 'cameras' ? (
-          // Cameras View
-          loading ? (
-            <div className="flex items-center justify-center h-64">
-              <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
-            </div>
-          ) : cameras.length === 0 ? (
-            <div className="text-center py-16">
-              <Camera className="h-16 w-16 mx-auto text-gray-600 mb-4" />
-              <h2 className="text-xl font-semibold text-gray-400 mb-2">No cameras yet</h2>
-              <p className="text-gray-500 mb-4">Add your first camera to get started</p>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition"
-              >
-                Add Camera
-              </button>
-            </div>
-          ) : viewMode === 'grid' ? (
-            <CameraGrid
-              cameras={cameras}
-              onDelete={deleteCamera}
-              onToggle={toggleCamera}
-              onSelect={setSelectedCamera}
-              onEdit={setShowEditModal}
-              onRestart={restartCamera}
-              onError={setError}
-            />
-          ) : (
-            <CameraList
-              cameras={cameras}
-              onDelete={deleteCamera}
-              onToggle={toggleCamera}
-              onEdit={setShowEditModal}
-              onRestart={restartCamera}
-              onError={setError}
-            />
-          )
-        ) : (
-          // Recordings View
-          <RecordingsPage cameras={cameras} />
-        )}
-      </main>
+            {currentPage === 'cameras' ? (
+              loading ? (
+                <div className="flex items-center justify-center h-64">
+                  <RefreshCw className="h-8 w-8 animate-spin text-blue-500" />
+                </div>
+              ) : cameras.length === 0 ? (
+                <div className="text-center py-16">
+                  <Camera className="h-16 w-16 mx-auto text-gray-600 mb-4" />
+                  <h2 className="text-xl font-semibold text-gray-400 mb-2">No cameras yet</h2>
+                  <p className="text-gray-500 mb-4">Add your first camera to get started</p>
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition"
+                  >
+                    Add Camera
+                  </button>
+                </div>
+              ) : viewMode === 'grid' ? (
+                <CameraGrid
+                  cameras={cameras}
+                  onDelete={deleteCamera}
+                  onToggle={toggleCamera}
+                  onSelect={setSelectedCamera}
+                  onEdit={setShowEditModal}
+                  onRestart={restartCamera}
+                  onError={setError}
+                />
+              ) : (
+                <CameraList
+                  cameras={cameras}
+                  onDelete={deleteCamera}
+                  onToggle={toggleCamera}
+                  onEdit={setShowEditModal}
+                  onRestart={restartCamera}
+                  onError={setError}
+                />
+              )
+            ) : (
+              <RecordingsPage cameras={cameras} />
+            )}
+          </main>
+        </>
+      )}
 
       {/* Add Camera Modal */}
       {showAddModal && (
@@ -308,16 +318,6 @@ function App() {
         />
       )}
 
-      {/* Settings Modal */}
-      {showSettingsModal && (
-        <SettingsModal
-          onClose={() => setShowSettingsModal(false)}
-          onClearAll={() => {
-            setShowSettingsModal(false)
-            fetchCameras()
-          }}
-        />
-      )}
       </div>
 
       {/* Chat Widget - docked version is part of flex layout */}
@@ -1211,16 +1211,17 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
   )
 }
 
-// Settings Modal
-function SettingsModal({ onClose, onClearAll }) {
+// Settings Full Page
+function SettingsPage({ nodes, onBack, onClearAll }) {
+  const [activeSection, setActiveSection] = useState('camera')
   const [settings, setSettings] = useState(null)
-  const [form, setForm] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
+  const [form, setForm] = useState({})
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -1246,18 +1247,22 @@ function SettingsModal({ onClose, onClearAll }) {
     fetchSettings()
   }, [])
 
-  const saveSettings = async () => {
+  const saveSettings = async (fields) => {
     setSaving(true)
     setError(null)
     setMessage(null)
     try {
+      const payload = fields || form
       const res = await fetch(`${API_URL}/settings/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) throw new Error('Failed to save settings')
-      setMessage(form.anthropic_api_key ? 'Settings saved! Click "Restart All" to apply API key.' : 'Settings saved!')
+      const data = await res.json()
+      setSettings(data)
+      setMessage((payload.anthropic_api_key) ? 'API key saved! Click "Restart All" in Nodes & Cluster to apply.' : 'Settings saved successfully.')
+      if (payload.anthropic_api_key) setForm(f => ({ ...f, anthropic_api_key: '' }))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -1284,7 +1289,7 @@ function SettingsModal({ onClose, onClearAll }) {
 
   const clearAllCameras = async () => {
     if (!confirm('DELETE ALL CAMERAS? This will remove all cameras from the database and Kubernetes. This cannot be undone!')) return
-    if (!confirm('Are you REALLY sure? Type "yes" mentally and click OK.')) return
+    if (!confirm('Are you absolutely sure? This action is irreversible.')) return
     setClearing(true)
     setError(null)
     try {
@@ -1300,187 +1305,440 @@ function SettingsModal({ onClose, onClearAll }) {
     }
   }
 
+  const navSections = [
+    { id: 'camera', label: 'Camera Settings', icon: Camera, description: 'Defaults & timers' },
+    { id: 'api', label: 'API Settings', icon: Key, description: 'External integrations' },
+    { id: 'nodes', label: 'Nodes & Cluster', icon: Server, description: 'Kubernetes management' },
+    { id: 'chatbot', label: 'Chatbot', icon: Bot, description: 'AI assistant config' },
+  ]
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-lg w-full max-w-lg mx-4 border border-gray-700">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
-          <h2 className="text-lg font-semibold flex items-center space-x-2">
-            <Settings className="h-5 w-5" />
-            <span>Settings</span>
-          </h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl">×</button>
+    <div className="flex flex-1 overflow-hidden" style={{ height: 'calc(100vh - 73px)' }}>
+      {/* Sidebar */}
+      <div className="w-64 bg-gray-800 border-r border-gray-700 flex flex-col flex-shrink-0">
+        <div className="p-4 border-b border-gray-700">
+          <button
+            onClick={onBack}
+            className="flex items-center space-x-2 text-gray-400 hover:text-white transition text-sm mb-4 group"
+          >
+            <ArrowLeft className="h-4 w-4 group-hover:-translate-x-0.5 transition-transform" />
+            <span>Back to Dashboard</span>
+          </button>
+          <div className="flex items-center space-x-2">
+            <Settings className="h-5 w-5 text-blue-400" />
+            <h2 className="text-base font-semibold">Settings</h2>
+          </div>
         </div>
-        
-        <div className="p-6 space-y-6">
+
+        <nav className="p-3 flex-1 space-y-1 overflow-y-auto">
+          {navSections.map(({ id, label, description, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setActiveSection(id)}
+              className={`w-full flex items-start space-x-3 px-3 py-3 rounded-lg text-left transition ${
+                activeSection === id
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }`}
+            >
+              <Icon className="h-4 w-4 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium leading-none">{label}</p>
+                <p className={`text-xs mt-0.5 ${activeSection === id ? 'text-blue-200' : 'text-gray-500'}`}>
+                  {description}
+                </p>
+              </div>
+            </button>
+          ))}
+        </nav>
+
+        {/* Sidebar footer info */}
+        {settings && (
+          <div className="p-4 border-t border-gray-700">
+            <p className="text-xs text-gray-500">
+              <span className="text-gray-400">Namespace:</span>{' '}
+              <span className="font-mono">{settings.k8s_namespace}</span>
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              <span className="text-gray-400">Node IPs:</span>{' '}
+              {Object.keys(settings.node_ips || {}).length} configured
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Content Area */}
+      <div className="flex-1 overflow-y-auto bg-gray-900">
+        {/* Sticky status banner */}
+        {(error || message) && (
+          <div className="sticky top-0 z-10 px-8 pt-4">
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between mb-2 backdrop-blur-sm">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                  <span className="text-sm">{error}</span>
+                </div>
+                <button onClick={() => setError(null)} className="text-red-300 hover:text-white ml-4 text-xl leading-none">×</button>
+              </div>
+            )}
+            {message && (
+              <div className="bg-green-500/10 border border-green-500/50 text-green-400 px-4 py-3 rounded-lg flex items-center justify-between mb-2 backdrop-blur-sm">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle className="h-4 w-4 flex-shrink-0" />
+                  <span className="text-sm">{message}</span>
+                </div>
+                <button onClick={() => setMessage(null)} className="text-green-300 hover:text-white ml-4 text-xl leading-none">×</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="p-8 max-w-3xl">
           {loading ? (
-            <div className="text-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-500" />
+            <div className="flex items-center justify-center h-64">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
             </div>
           ) : (
             <>
-              {error && (
-                <div className="bg-red-500/10 border border-red-500 text-red-500 px-3 py-2 rounded text-sm">
-                  {error}
-                </div>
-              )}
-              {message && (
-                <div className="bg-green-500/10 border border-green-500 text-green-500 px-3 py-2 rounded text-sm">
-                  {message}
-                </div>
-              )}
+              {/* ── Camera Settings ── */}
+              {activeSection === 'camera' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-bold">Camera Settings</h2>
+                    <p className="text-gray-400 mt-1">Configure default video settings applied to all new cameras</p>
+                  </div>
 
-              {/* Camera Defaults */}
-              <div>
-                <h3 className="text-sm font-medium text-gray-300 mb-3">Camera Defaults</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Resolution</label>
-                    <select
-                      value={form.default_resolution}
-                      onChange={e => setForm({ ...form, default_resolution: e.target.value })}
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm"
-                    >
-                      <option value="320x240">320x240</option>
-                      <option value="640x480">640x480</option>
-                      <option value="800x600">800x600</option>
-                      <option value="1280x720">1280x720 (HD)</option>
-                      <option value="1920x1080">1920x1080 (FHD)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Framerate</label>
-                    <input
-                      type="number"
-                      value={form.default_framerate}
-                      onChange={e => setForm({ ...form, default_framerate: parseInt(e.target.value) })}
-                      min="1"
-                      max="60"
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* System Settings */}
-              <div>
-                <h3 className="text-sm font-medium text-gray-300 mb-3">System Settings</h3>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Cleanup Interval (cron)</label>
-                    <input
-                      type="text"
-                      value={form.cleanup_interval}
-                      onChange={e => setForm({ ...form, cleanup_interval: e.target.value })}
-                      placeholder="*/10 * * * *"
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Cron expression for orphan pod cleanup (default: every 10 min)</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Creating Timeout (minutes)</label>
-                    <input
-                      type="number"
-                      value={form.creating_timeout_minutes}
-                      onChange={e => setForm({ ...form, creating_timeout_minutes: parseInt(e.target.value) })}
-                      min="1"
-                      max="30"
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Auto-stop cameras stuck in "creating" state</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Chatbot Settings */}
-              <div>
-                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center space-x-2">
-                  <MessageCircle className="h-4 w-4" />
-                  <span>Chatbot Settings</span>
-                  {settings?.chatbot?.api_key_configured ? (
-                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded">Configured</span>
-                  ) : (
-                    <span className="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">Not configured</span>
-                  )}
-                </h3>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Anthropic API Key</label>
-                    <input
-                      type="password"
-                      value={form.anthropic_api_key || ''}
-                      onChange={e => setForm({ ...form, anthropic_api_key: e.target.value })}
-                      placeholder={settings?.chatbot?.api_key_configured ? "••••••••••••••••" : "sk-ant-..."}
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm font-mono"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Required for AI assistant (stored securely)</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Enabled Tools</label>
-                    <div className="space-y-1 max-h-32 overflow-y-auto bg-gray-700/50 rounded p-2">
-                      {settings?.chatbot?.available_tools?.map(tool => (
-                        <label key={tool} className="flex items-center space-x-2 text-sm cursor-pointer hover:bg-gray-600/50 rounded px-1">
-                          <input
-                            type="checkbox"
-                            checked={(form.chatbot_tools || settings?.chatbot?.enabled_tools || []).includes(tool)}
-                            onChange={(e) => {
-                              const current = form.chatbot_tools || settings?.chatbot?.enabled_tools || []
-                              if (e.target.checked) {
-                                setForm({ ...form, chatbot_tools: [...current, tool] })
-                              } else {
-                                setForm({ ...form, chatbot_tools: current.filter(t => t !== tool) })
-                              }
-                            }}
-                            className="rounded bg-gray-600 border-gray-500 text-blue-500"
-                          />
-                          <span className="text-gray-300">{tool.replace(/_/g, ' ')}</span>
-                        </label>
-                      ))}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Video Defaults</h3>
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Default Resolution</label>
+                        <select
+                          value={form.default_resolution}
+                          onChange={e => setForm({ ...form, default_resolution: e.target.value })}
+                          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                        >
+                          <option value="320x240">320×240 — Low</option>
+                          <option value="640x480">640×480 — SD</option>
+                          <option value="800x600">800×600</option>
+                          <option value="1280x720">1280×720 — HD</option>
+                          <option value="1920x1080">1920×1080 — FHD</option>
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1.5">Applies to new cameras by default</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Default Framerate (FPS)</label>
+                        <input
+                          type="number"
+                          value={form.default_framerate}
+                          onChange={e => setForm({ ...form, default_framerate: parseInt(e.target.value) })}
+                          min="1"
+                          max="60"
+                          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                        />
+                        <p className="text-xs text-gray-500 mt-1.5">Frames per second, between 1 and 60</p>
+                      </div>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">Tools the chatbot can use (read-only access)</p>
                   </div>
-                </div>
-              </div>
 
-              {/* Info */}
-              {settings && (
-                <div className="bg-gray-700/30 rounded p-3 text-sm">
-                  <p className="text-gray-400"><strong>Namespace:</strong> {settings.k8s_namespace}</p>
-                  <p className="text-gray-400"><strong>Node IPs:</strong> {Object.keys(settings.node_ips || {}).length} configured</p>
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">System Timers</h3>
+                    <div className="space-y-5">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Cleanup Interval</label>
+                        <input
+                          type="text"
+                          value={form.cleanup_interval}
+                          onChange={e => setForm({ ...form, cleanup_interval: e.target.value })}
+                          placeholder="*/10 * * * *"
+                          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 font-mono text-sm"
+                        />
+                        <p className="text-xs text-gray-500 mt-1.5">Cron expression for orphan pod cleanup. Default: every 10 minutes.</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Creating Timeout (minutes)</label>
+                        <input
+                          type="number"
+                          value={form.creating_timeout_minutes}
+                          onChange={e => setForm({ ...form, creating_timeout_minutes: parseInt(e.target.value) })}
+                          min="1"
+                          max="30"
+                          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                        />
+                        <p className="text-xs text-gray-500 mt-1.5">Auto-stop cameras stuck in "creating" state after this many minutes</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => saveSettings({
+                      default_resolution: form.default_resolution,
+                      default_framerate: form.default_framerate,
+                      cleanup_interval: form.cleanup_interval,
+                      creating_timeout_minutes: form.creating_timeout_minutes,
+                    })}
+                    disabled={saving}
+                    className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-6 py-2.5 rounded-lg transition font-medium"
+                  >
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    <span>{saving ? 'Saving…' : 'Save Camera Settings'}</span>
+                  </button>
                 </div>
               )}
 
-              {/* Actions */}
-              <div className="flex space-x-3">
-                <button
-                  onClick={saveSettings}
-                  disabled={saving}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
-                >
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  <span>{saving ? 'Saving...' : 'Save'}</span>
-                </button>
-                <button
-                  onClick={restartAll}
-                  disabled={restarting}
-                  className="flex-1 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-600/50 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
-                >
-                  {restarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                  <span>{restarting ? 'Restarting...' : 'Restart All'}</span>
-                </button>
-              </div>
+              {/* ── API Settings ── */}
+              {activeSection === 'api' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-bold">API Settings</h2>
+                    <p className="text-gray-400 mt-1">Manage external API integrations and credentials</p>
+                  </div>
 
-              {/* Danger Zone */}
-              <div className="border-t border-gray-700 pt-4">
-                <h3 className="text-sm font-medium text-red-400 mb-3">Danger Zone</h3>
-                <button
-                  onClick={clearAllCameras}
-                  disabled={clearing}
-                  className="w-full bg-red-600/20 hover:bg-red-600/30 border border-red-600 text-red-400 px-4 py-2 rounded-lg transition flex items-center justify-center space-x-2"
-                >
-                  {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                  <span>{clearing ? 'Clearing...' : 'Clear All Cameras'}</span>
-                </button>
-              </div>
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-5">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Anthropic API</h3>
+                      {settings?.chatbot?.api_key_configured ? (
+                        <span className="flex items-center space-x-1.5 text-xs bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full border border-green-500/30">
+                          <CheckCircle className="h-3 w-3" />
+                          <span>Configured</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center space-x-1.5 text-xs bg-yellow-500/15 text-yellow-400 px-2.5 py-1 rounded-full border border-yellow-500/30">
+                          <AlertCircle className="h-3 w-3" />
+                          <span>Not Configured</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Anthropic API Key</label>
+                      <input
+                        type="password"
+                        value={form.anthropic_api_key || ''}
+                        onChange={e => setForm({ ...form, anthropic_api_key: e.target.value })}
+                        placeholder={settings?.chatbot?.api_key_configured ? '••••••••••••••••  (leave blank to keep current)' : 'sk-ant-api03-…'}
+                        className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 font-mono text-sm"
+                      />
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        Required for the AI chatbot assistant. Stored securely as a Kubernetes secret.
+                      </p>
+                    </div>
+
+                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+                      <p className="text-sm text-blue-300 font-medium mb-1">How to get an API key</p>
+                      <p className="text-xs text-blue-200/70 leading-relaxed">
+                        Visit <span className="font-mono bg-blue-500/20 px-1 rounded">console.anthropic.com</span> to create an account and generate an API key. Keys start with <span className="font-mono bg-blue-500/20 px-1 rounded">sk-ant-</span>. After saving, go to <strong>Nodes &amp; Cluster</strong> and click <strong>Restart All</strong> to apply the key.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => saveSettings({ anthropic_api_key: form.anthropic_api_key })}
+                      disabled={saving || !form.anthropic_api_key}
+                      className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/40 disabled:cursor-not-allowed px-6 py-2.5 rounded-lg transition font-medium"
+                    >
+                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Key className="h-4 w-4" />}
+                      <span>{saving ? 'Saving…' : 'Save API Key'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Nodes & Cluster Management ── */}
+              {activeSection === 'nodes' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-bold">Nodes &amp; Cluster Management</h2>
+                    <p className="text-gray-400 mt-1">View Kubernetes nodes and perform cluster operations</p>
+                  </div>
+
+                  {/* Cluster overview */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Cluster Overview</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-gray-700/50 rounded-lg p-4">
+                        <p className="text-xs text-gray-400 mb-1">Kubernetes Namespace</p>
+                        <p className="font-mono text-blue-400 font-semibold">{settings?.k8s_namespace || 'falcon-eye'}</p>
+                      </div>
+                      <div className="bg-gray-700/50 rounded-lg p-4">
+                        <p className="text-xs text-gray-400 mb-1">Registered Nodes</p>
+                        <p className="text-3xl font-bold">{nodes.length}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Node list */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Active Nodes</h3>
+                    {nodes.length === 0 ? (
+                      <div className="text-center py-10 text-gray-500">
+                        <Server className="h-10 w-10 mx-auto mb-3 opacity-40" />
+                        <p className="text-sm">No nodes registered</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {nodes.map(node => (
+                          <div key={node.name} className="flex items-center justify-between bg-gray-700/50 rounded-lg px-4 py-3.5">
+                            <div className="flex items-center space-x-3">
+                              <div className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]" />
+                              <div>
+                                <p className="font-medium text-sm">{node.name}</p>
+                                <p className="text-xs text-gray-400 font-mono">{node.ip}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              {node.roles?.map(role => (
+                                <span key={role} className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">{role}</span>
+                              ))}
+                              <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded">Online</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Node IP mappings */}
+                  {settings?.node_ips && Object.keys(settings.node_ips).length > 0 && (
+                    <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Node IP Mappings</h3>
+                      <div className="space-y-2">
+                        {Object.entries(settings.node_ips).map(([nodeName, ip]) => (
+                          <div key={nodeName} className="flex items-center justify-between text-sm bg-gray-700/50 rounded-lg px-4 py-2.5">
+                            <span className="font-medium">{nodeName}</span>
+                            <span className="font-mono text-gray-400 text-xs">{ip}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cluster operations */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Cluster Operations</h3>
+                    <div className="flex items-start justify-between py-2">
+                      <div className="flex-1 mr-6">
+                        <p className="text-sm font-medium">Restart All Deployments</p>
+                        <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                          Rolls out new pods for all Falcon-Eye deployments. Also required after saving a new API key. Briefly interrupts camera streams.
+                        </p>
+                      </div>
+                      <button
+                        onClick={restartAll}
+                        disabled={restarting}
+                        className="flex items-center space-x-2 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-600/50 px-4 py-2 rounded-lg transition text-sm font-medium flex-shrink-0"
+                      >
+                        {restarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        <span>{restarting ? 'Restarting…' : 'Restart All'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Danger zone */}
+                  <div className="bg-red-950/20 rounded-xl border border-red-700/40 p-6 space-y-4">
+                    <h3 className="text-xs font-semibold text-red-400 uppercase tracking-wider flex items-center space-x-2">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      <span>Danger Zone</span>
+                    </h3>
+                    <div className="flex items-start justify-between py-2">
+                      <div className="flex-1 mr-6">
+                        <p className="text-sm font-medium text-red-300">Clear All Cameras</p>
+                        <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                          Permanently removes every camera from the database and Kubernetes. This action cannot be undone.
+                        </p>
+                      </div>
+                      <button
+                        onClick={clearAllCameras}
+                        disabled={clearing}
+                        className="flex items-center space-x-2 bg-red-600/20 hover:bg-red-600/40 border border-red-600/60 text-red-400 px-4 py-2 rounded-lg transition text-sm font-medium flex-shrink-0"
+                      >
+                        {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        <span>{clearing ? 'Clearing…' : 'Clear All Cameras'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Chatbot ── */}
+              {activeSection === 'chatbot' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-bold">Chatbot</h2>
+                    <p className="text-gray-400 mt-1">Configure the Falcon-Eye AI assistant powered by Claude</p>
+                  </div>
+
+                  {/* Status card */}
+                  <div className={`rounded-xl border p-5 ${settings?.chatbot?.api_key_configured ? 'bg-green-950/20 border-green-700/40' : 'bg-yellow-950/20 border-yellow-700/40'}`}>
+                    <div className="flex items-start space-x-4">
+                      <div className={`p-2.5 rounded-lg ${settings?.chatbot?.api_key_configured ? 'bg-green-500/20' : 'bg-yellow-500/20'}`}>
+                        <Bot className={`h-5 w-5 ${settings?.chatbot?.api_key_configured ? 'text-green-400' : 'text-yellow-400'}`} />
+                      </div>
+                      <div>
+                        <p className={`font-semibold ${settings?.chatbot?.api_key_configured ? 'text-green-300' : 'text-yellow-300'}`}>
+                          {settings?.chatbot?.api_key_configured ? 'Chatbot Ready' : 'Chatbot Not Configured'}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                          {settings?.chatbot?.api_key_configured
+                            ? 'Anthropic API key is configured. The assistant is ready to use.'
+                            : 'Add an Anthropic API key under API Settings to enable the chatbot, then restart deployments.'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tool toggles */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-5">
+                    <div>
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Enabled Tools</h3>
+                      <p className="text-xs text-gray-500 mt-1">Control which capabilities the chatbot can use when answering queries</p>
+                    </div>
+
+                    {settings?.chatbot?.available_tools?.length > 0 ? (
+                      <div className="space-y-2">
+                        {settings.chatbot.available_tools.map(tool => {
+                          const isEnabled = (form.chatbot_tools || settings?.chatbot?.enabled_tools || []).includes(tool)
+                          return (
+                            <label key={tool} className="flex items-center justify-between bg-gray-700/50 hover:bg-gray-700 rounded-lg px-4 py-3 cursor-pointer transition group">
+                              <div>
+                                <p className="text-sm font-medium capitalize">{tool.replace(/_/g, ' ')}</p>
+                                <p className="text-xs text-gray-500 font-mono mt-0.5">{tool}</p>
+                              </div>
+                              <div className="relative flex-shrink-0 ml-4">
+                                <input
+                                  type="checkbox"
+                                  checked={isEnabled}
+                                  onChange={(e) => {
+                                    const current = form.chatbot_tools || settings?.chatbot?.enabled_tools || []
+                                    if (e.target.checked) {
+                                      setForm({ ...form, chatbot_tools: [...current, tool] })
+                                    } else {
+                                      setForm({ ...form, chatbot_tools: current.filter(t => t !== tool) })
+                                    }
+                                  }}
+                                  className="sr-only peer"
+                                />
+                                <div className={`w-10 h-6 rounded-full transition-colors ${isEnabled ? 'bg-blue-600' : 'bg-gray-600'} peer-focus:ring-2 peer-focus:ring-blue-500`} />
+                                <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                              </div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500 text-center py-6">No tools available</p>
+                    )}
+
+                    <button
+                      onClick={() => saveSettings({ chatbot_tools: form.chatbot_tools })}
+                      disabled={saving}
+                      className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-6 py-2.5 rounded-lg transition font-medium"
+                    >
+                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      <span>{saving ? 'Saving…' : 'Save Tool Settings'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
