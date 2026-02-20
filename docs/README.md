@@ -18,6 +18,7 @@ Open the dashboard URL printed at the end (port 30900), and manage everything fr
 |----------|-------------|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, components, data flow, network security model | Developers, Architects |
 | [INSTALL-GUIDE.md](INSTALL-GUIDE.md) | Step-by-step installation walkthrough, upgrade, uninstall | Operators, DevOps |
+| [DEVELOPER.md](DEVELOPER.md) | Local development setup, LOCAL_TEST mode, building and testing | Contributors |
 | [USER-MANUAL.md](USER-MANUAL.md) | How to use the dashboard, add cameras, record video | End Users |
 | [API-REFERENCE.md](API-REFERENCE.md) | Complete REST API documentation with examples | Developers |
 | [CODE-REFERENCE.md](CODE-REFERENCE.md) | Source code structure, component internals, CI/CD | Contributors |

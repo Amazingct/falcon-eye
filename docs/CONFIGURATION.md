@@ -210,5 +210,6 @@ The recorder image is hardcoded in `k8s.py` as `ghcr.io/amazingct/falcon-eye-rec
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LOCAL_TEST` | `false` | Set to `true` to build all images from local source and use `imagePullPolicy: IfNotPresent`. See [DEVELOPER.md](DEVELOPER.md) for details. |
 | `FALCON_EYE_OWNER` | `amazingct` | GitHub owner for container image references. Change this when using a fork. |
 | `ANTHROPIC_API_KEY` | *(empty)* | If set before running the installer, enables the AI chatbot. Can also be configured later via the Settings page. |

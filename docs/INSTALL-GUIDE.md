@@ -6,11 +6,12 @@ Falcon-Eye is designed for **one-command installation**. Run the installer, open
 
 ## Prerequisites
 
-- A Linux machine (amd64 or arm64 — including NVIDIA Jetson)
+- Linux (amd64 or arm64 — including NVIDIA Jetson) or macOS (via k3d)
 - Internet access (to pull container images from `ghcr.io`)
 - **One of**:
   - An existing Kubernetes cluster with `kubectl` configured
-  - A machine where you can install k3s (the installer can do this for you)
+  - A Linux machine where you can install k3s (the installer can do this for you)
+  - macOS with Docker Desktop (the installer creates a k3d cluster automatically)
 - For USB cameras: the cameras must be physically connected to a cluster node
 
 ## One-Line Install
@@ -33,9 +34,8 @@ The installer runs 9 steps, with an optional step 3.5 for configuration:
 
 | Option | Description |
 |--------|-------------|
-| **1) Install k3s** | Installs k3s on the local machine (single-node setup). Sets up kubeconfig at `~/.kube/config` |
-| **2) Paste kubeconfig** | Lets you paste an existing kubeconfig for a remote cluster |
-| **3) Exit** | Exit and configure `kubectl` manually |
+| **1) Create a new cluster** | On Linux: installs k3s. On macOS: installs k3d (k3s-in-Docker) with ports 30800 and 30900 mapped |
+| **2) Connect to existing** | Choose from detected kubectl contexts or paste a kubeconfig manually |
 
 ### Step 2/9: Check Existing Installation
 
@@ -155,6 +155,25 @@ Open the dashboard in your browser. **All further configuration** — adding cam
 
 Upgrades are safe — all `kubectl apply` operations are idempotent. The PVC preserves database data.
 
+## Local Test Mode
+
+Build and deploy from local source without pushing to GitHub first:
+
+```bash
+LOCAL_TEST=true bash install.sh
+```
+
+When `LOCAL_TEST=true`:
+
+1. All 7 Docker images are built from local source (API, dashboard, recorder, camera-usb, camera-rtsp, agent, cron-runner)
+2. Images are tagged and imported into the k3d (macOS) or k3s (Linux) cluster
+3. `imagePullPolicy` is set to `IfNotPresent` so Kubernetes uses the local images instead of pulling from ghcr.io
+4. Dynamic pods (cameras, recorders, agents) also use the local images since they share the same tags
+
+This is the recommended workflow for development: edit code, run `LOCAL_TEST=true bash install.sh`, and test in-cluster — no git push or CI pipeline needed.
+
+When `LOCAL_TEST` is unset or `false`, the default behavior is unchanged — images are pulled from ghcr.io.
+
 ## Local Development Access
 
 Since the API is not exposed externally, use `kubectl port-forward` for local development or debugging:
@@ -166,6 +185,19 @@ kubectl port-forward svc/falcon-eye-api 8000:8000 -n falcon-eye
 # Access PostgreSQL locally
 kubectl port-forward svc/postgres 5432:5432 -n falcon-eye
 ```
+
+### Frontend Hot-Reload
+
+Run the frontend locally with hot-reload against a live cluster:
+
+```bash
+cd frontend
+cp .env.example .env     # Configure backend URL
+npm install
+npm run dev              # http://localhost:3001
+```
+
+The Vite proxy in `vite.config.js` forwards `/api` requests to the backend. Edit the proxy `target` to point to your API.
 
 ## Checking Status
 
@@ -194,6 +226,7 @@ kubectl delete clusterrolebinding falcon-eye-binding
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LOCAL_TEST` | `false` | Set to `true` to build images from local source instead of pulling from ghcr.io |
 | `FALCON_EYE_OWNER` | `amazingct` | GitHub owner for container images (allows forks to use their own images) |
 | `ANTHROPIC_API_KEY` | *(empty)* | Anthropic API key for AI chatbot (can be set during install or via Settings page) |
 

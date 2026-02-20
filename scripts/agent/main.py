@@ -84,6 +84,7 @@ async def process_message(message_text: str, session_id: str, source: str = "tel
 # ─── Telegram Bot ───────────────────────────────────────────
 
 telegram_app = None
+telegram_ready = False
 
 
 async def start_telegram_bot():
@@ -143,9 +144,24 @@ async def start_telegram_bot():
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Starting Telegram bot polling...")
-    await telegram_app.initialize()
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        try:
+            await telegram_app.initialize()
+            break
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error(f"Failed to initialize Telegram bot after {max_retries} attempts: {e}")
+                return
+            wait = min(2 ** attempt, 30)
+            logger.warning(f"Telegram bot init attempt {attempt}/{max_retries} failed ({e.__class__.__name__}), retrying in {wait}s...")
+            await asyncio.sleep(wait)
+
+    global telegram_ready
     await telegram_app.start()
     await telegram_app.updater.start_polling(drop_pending_updates=True)
+    telegram_ready = True
+    logger.info("Telegram bot polling started successfully")
 
 
 async def stop_telegram_bot():
@@ -173,7 +189,10 @@ app = FastAPI(title="Falcon-Eye Agent", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "agent_id": AGENT_ID, "channel": CHANNEL_TYPE, "provider": LLM_PROVIDER}
+    status = "ok"
+    if CHANNEL_TYPE == "telegram" and not telegram_ready:
+        status = "degraded"
+    return {"status": status, "agent_id": AGENT_ID, "channel": CHANNEL_TYPE, "provider": LLM_PROVIDER}
 
 
 @app.get("/")

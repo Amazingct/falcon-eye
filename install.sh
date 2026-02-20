@@ -21,12 +21,26 @@ API_PORT=8000  # Single source of truth for API port
 RELEASE_URL="https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main"
 IS_UPGRADE=false
 
+# LOCAL_TEST=true builds images from local source instead of pulling from ghcr.io
+LOCAL_TEST="${LOCAL_TEST:-false}"
+if [ "$LOCAL_TEST" = "true" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    IMAGE_PULL_POLICY="IfNotPresent"
+else
+    IMAGE_PULL_POLICY="Always"
+fi
+
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════╗"
 echo "║                    🦅 FALCON-EYE                          ║"
 echo "║         Distributed Camera Streaming for K8s              ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
+
+if [ "$LOCAL_TEST" = "true" ]; then
+    echo -e "${YELLOW}🔧 LOCAL_TEST mode — images will be built from local source${NC}"
+    echo ""
+fi
 
 # Install k3s (Linux) or k3d (macOS)
 install_k3s() {
@@ -115,6 +129,98 @@ install_k3d_mac() {
     kubectl wait --for=condition=Ready node --all --timeout=120s
 
     echo -e "${GREEN}✓ k3d cluster created successfully (k3s running in Docker)${NC}"
+}
+
+# Build images from local source and import into the cluster
+build_local_images() {
+    echo -e "${YELLOW}[LOCAL] Building images from local source...${NC}"
+
+    if ! command -v docker &> /dev/null || ! docker info &> /dev/null 2>&1; then
+        echo -e "${RED}✗ Docker is required for LOCAL_TEST but is not running.${NC}"
+        exit 1
+    fi
+
+    if [ ! -f "${SCRIPT_DIR}/scripts/cam-manager-py/Dockerfile" ]; then
+        echo -e "${RED}✗ Cannot find Dockerfiles. Run install.sh from the repo root.${NC}"
+        exit 1
+    fi
+
+    LOCAL_TAG="local"
+
+    # Core images (required — abort on failure)
+    CORE_IMAGES=(
+        "falcon-eye-api:scripts/cam-manager-py"
+        "falcon-eye-dashboard:frontend"
+    )
+    # Optional images (used by dynamic pods — warn on failure, don't abort)
+    OPTIONAL_IMAGES=(
+        "falcon-eye-recorder:scripts/recorder"
+        "falcon-eye-camera-usb:scripts/camera-usb"
+        "falcon-eye-camera-rtsp:scripts/camera-rtsp"
+        "falcon-eye-agent:scripts/agent"
+        "falcon-eye-cron-runner:scripts/cron-runner"
+    )
+
+    BUILT_IMAGES=()
+    FAILED_OPTIONAL=()
+
+    for entry in "${CORE_IMAGES[@]}"; do
+        IMG_NAME="${entry%%:*}"
+        BUILD_CTX="${entry#*:}"
+        FULL_TAG="${REGISTRY}/${REPO_OWNER}/${IMG_NAME}:${LOCAL_TAG}"
+
+        echo -e "  Building ${CYAN}${IMG_NAME}${NC} from ${BUILD_CTX}/ ..."
+        if docker build -q -t "${FULL_TAG}" "${SCRIPT_DIR}/${BUILD_CTX}" > /dev/null 2>&1; then
+            docker tag "${FULL_TAG}" "${REGISTRY}/${REPO_OWNER}/${IMG_NAME}:latest"
+            BUILT_IMAGES+=("${FULL_TAG}" "${REGISTRY}/${REPO_OWNER}/${IMG_NAME}:latest")
+            echo -e "  ${GREEN}✓${NC} ${IMG_NAME}"
+        else
+            echo -e "  ${RED}✗ Failed to build ${IMG_NAME} (required)${NC}"
+            docker build -t "${FULL_TAG}" "${SCRIPT_DIR}/${BUILD_CTX}"
+            exit 1
+        fi
+    done
+
+    for entry in "${OPTIONAL_IMAGES[@]}"; do
+        IMG_NAME="${entry%%:*}"
+        BUILD_CTX="${entry#*:}"
+        FULL_TAG="${REGISTRY}/${REPO_OWNER}/${IMG_NAME}:${LOCAL_TAG}"
+
+        echo -e "  Building ${CYAN}${IMG_NAME}${NC} from ${BUILD_CTX}/ ..."
+        if docker build -q -t "${FULL_TAG}" "${SCRIPT_DIR}/${BUILD_CTX}" > /dev/null 2>&1; then
+            docker tag "${FULL_TAG}" "${REGISTRY}/${REPO_OWNER}/${IMG_NAME}:latest"
+            BUILT_IMAGES+=("${FULL_TAG}" "${REGISTRY}/${REPO_OWNER}/${IMG_NAME}:latest")
+            echo -e "  ${GREEN}✓${NC} ${IMG_NAME}"
+        else
+            FAILED_OPTIONAL+=("${IMG_NAME}")
+            echo -e "  ${YELLOW}⚠ ${IMG_NAME} (skipped — will pull from ghcr.io at runtime)${NC}"
+        fi
+    done
+
+    if [ ${#FAILED_OPTIONAL[@]} -gt 0 ]; then
+        echo ""
+        echo -e "  ${YELLOW}Note: ${#FAILED_OPTIONAL[@]} optional image(s) failed to build.${NC}"
+        echo -e "  ${YELLOW}These will be pulled from ghcr.io when needed (cameras, recorders, agents).${NC}"
+    fi
+
+    echo ""
+    echo -e "${YELLOW}[LOCAL] Importing images into cluster...${NC}"
+
+    CONTEXT=$(kubectl config current-context 2>/dev/null || echo "")
+
+    if echo "$CONTEXT" | grep -q "k3d-"; then
+        # k3d: import via k3d CLI
+        CLUSTER_NAME="${CONTEXT#k3d-}"
+        k3d image import ${BUILT_IMAGES[@]} -c "${CLUSTER_NAME}" 2>&1 | tail -1
+    else
+        # k3s/generic: save and import via ctr
+        echo "  Saving images to tarball..."
+        docker save ${BUILT_IMAGES[@]} | sudo k3s ctr images import - 2>/dev/null \
+            || echo -e "${YELLOW}  ⚠ Could not auto-import. Images are available in local Docker.${NC}"
+    fi
+
+    echo -e "${GREEN}✓ Local images built and imported${NC}"
+    echo ""
 }
 
 # Set up kubeconfig from user input
@@ -327,7 +433,11 @@ check_existing() {
             echo -e "${CYAN}✓ Existing installation found - will upgrade${NC}"
             echo -e "  Current API:       ${CURRENT_API_IMAGE}"
             echo -e "  Current Dashboard: ${CURRENT_DASH_IMAGE}"
-            echo -e "  New images:        ${REGISTRY}/${REPO_OWNER}/falcon-eye-*:latest"
+            if [ "$LOCAL_TEST" = "true" ]; then
+                echo -e "  New images:        ${CYAN}local build${NC}"
+            else
+                echo -e "  New images:        ${REGISTRY}/${REPO_OWNER}/falcon-eye-*:latest"
+            fi
         else
             echo -e "${GREEN}✓ Namespace exists but no deployment - fresh install${NC}"
         fi
@@ -604,7 +714,7 @@ $([ -n "$API_NODE" ] && echo "      nodeSelector:
       containers:
       - name: api
         image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
-        imagePullPolicy: Always
+        imagePullPolicy: ${IMAGE_PULL_POLICY}
         ports:
         - containerPort: ${API_PORT}
         envFrom:
@@ -720,7 +830,7 @@ $([ -n "$DASHBOARD_NODE" ] && echo "      nodeSelector:
       containers:
       - name: dashboard
         image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-dashboard:latest
-        imagePullPolicy: Always
+        imagePullPolicy: ${IMAGE_PULL_POLICY}
         ports:
         - containerPort: 80
         env:
@@ -880,7 +990,7 @@ spec:
           containers:
           - name: cleanup
             image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
-            imagePullPolicy: Always
+            imagePullPolicy: ${IMAGE_PULL_POLICY}
             command: ["python", "-m", "app.tasks.cleanup"]
             env:
             - name: K8S_NAMESPACE
@@ -1060,6 +1170,9 @@ main() {
     detect_nodes
     configure_options
     create_namespace
+    if [ "$LOCAL_TEST" = "true" ]; then
+        build_local_images
+    fi
     deploy_database
     deploy_backend
     deploy_frontend
@@ -1082,9 +1195,16 @@ case "${1:-}" in
         echo "  install.sh --status  Show current status and URLs"
         echo "  install.sh --help    Show this help"
         echo ""
+        echo "Environment Variables:"
+        echo "  LOCAL_TEST=true      Build images from local source instead of pulling from ghcr.io"
+        echo "                       Requires Docker and must be run from the repo root"
+        echo ""
         echo "Examples:"
-        echo "  # Install/upgrade"
+        echo "  # Install/upgrade from GitHub images"
         echo "  curl -sSL https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main/install.sh | bash"
+        echo ""
+        echo "  # Install/upgrade from local source (for development)"
+        echo "  LOCAL_TEST=true bash install.sh"
         echo ""
         echo "  # Check status"
         echo "  curl -sSL https://raw.githubusercontent.com/${REPO_OWNER}/falcon-eye/main/install.sh | bash -s -- --status"

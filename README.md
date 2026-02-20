@@ -136,38 +136,43 @@ See [docs/API-REFERENCE.md](docs/API-REFERENCE.md) for full documentation.
 
 ## Development
 
-### Local Development
+### Local Test Mode
+
+Build and deploy from local source without pushing to GitHub:
 
 ```bash
-# Backend
+LOCAL_TEST=true bash install.sh
+```
+
+This builds all 7 Docker images from local source, imports them into k3d/k3s, and sets `imagePullPolicy: IfNotPresent` so the cluster uses your local code. Run it again after making changes to rebuild and redeploy.
+
+### Frontend Development
+
+Run the frontend against a live cluster for hot-reload development:
+
+```bash
+cd frontend
+cp .env.example .env     # Edit VITE_API_URL or use the Vite proxy
+npm install
+npm run dev              # http://localhost:3001
+```
+
+The Vite proxy in `vite.config.js` forwards `/api` requests to the backend. Edit the proxy `target` to point to your API (default: `http://localhost:30800`).
+
+### Backend Development
+
+```bash
 cd scripts/cam-manager-py
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
-
-# Frontend
-cd frontend
-npm install
-npm run dev
 ```
 
-For accessing the in-cluster API locally:
+### Port-Forward (for local access to in-cluster services)
 
 ```bash
 kubectl port-forward svc/falcon-eye-api 8000:8000 -n falcon-eye
-```
-
-### Building Docker Images
-
-```bash
-# Backend
-cd scripts/cam-manager-py
-docker build -t falcon-eye-api .
-
-# Frontend
-cd frontend
-docker build -t falcon-eye-dashboard .
 ```
 
 ## Documentation
@@ -176,6 +181,7 @@ docker build -t falcon-eye-dashboard .
 |----------|-------------|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture, components, data flow |
 | [INSTALL-GUIDE.md](docs/INSTALL-GUIDE.md) | Installation walkthrough, upgrade, uninstall |
+| [DEVELOPER.md](docs/DEVELOPER.md) | Local development setup, LOCAL_TEST mode, building and testing |
 | [USER-MANUAL.md](docs/USER-MANUAL.md) | Dashboard usage guide for end users |
 | [API-REFERENCE.md](docs/API-REFERENCE.md) | Complete REST API documentation |
 | [CODE-REFERENCE.md](docs/CODE-REFERENCE.md) | Source code structure and internals |
