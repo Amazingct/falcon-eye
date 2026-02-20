@@ -25,8 +25,6 @@ settings = get_settings()
 # Track cameras being deleted (device_path -> delete_time)
 _deleting_cameras: dict[str, float] = {}
 
-# Timeout for stuck "creating" cameras (3 minutes)
-CREATING_TIMEOUT_MINUTES = 3
 
 
 def enrich_camera_response(camera: Camera, k8s_status: Optional[dict] = None) -> dict:
@@ -76,13 +74,19 @@ async def list_cameras(
             enriched.append(enrich_camera_response(cam, k8s_status))
             continue
         
-        # Check for stuck "creating" cameras (timeout after 3 minutes)
+        # Check for stuck "creating" cameras
         if cam.status == CameraStatus.CREATING.value:
             created_at = cam.updated_at or cam.created_at
             if created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=timezone.utc)
-            if now - created_at > timedelta(minutes=CREATING_TIMEOUT_MINUTES):
-                # Auto-stop stuck camera
+            timeout = settings.creating_timeout_minutes
+            if now - created_at > timedelta(minutes=timeout):
+                # Check actual pod state — don't kill pods still pulling images
+                pod_state = await k8s.get_camera_pod_status(str(cam.id))
+                if pod_state == "creating":
+                    enriched.append(enrich_camera_response(cam, k8s_status))
+                    continue
+
                 try:
                     if cam.deployment_name or cam.service_name:
                         await k8s.delete_camera_deployment(
@@ -90,7 +94,7 @@ async def list_cameras(
                             cam.service_name or "",
                         )
                     cam.status = CameraStatus.ERROR.value
-                    cam.metadata = {**cam.metadata, "error": "Timed out while creating (3 min)"}
+                    cam.metadata = {**cam.metadata, "error": f"Timed out while creating ({timeout} min)"}
                     cam.deployment_name = None
                     cam.service_name = None
                     await db.commit()

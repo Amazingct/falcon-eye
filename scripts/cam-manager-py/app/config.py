@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     default_framerate: int = 15
     default_camera_node: str = ""  # Default node for camera pods (empty = auto)
     default_recorder_node: str = ""  # Default node for recorder pods (empty = auto)
+    creating_timeout_minutes: int = 15
     default_stream_quality: int = 70
     
     # Jetson/special nodes that need tolerations (comma-separated via env)
