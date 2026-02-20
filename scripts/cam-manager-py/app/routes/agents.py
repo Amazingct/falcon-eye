@@ -195,9 +195,47 @@ async def stop_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 async def ensure_main_agent(db: AsyncSession):
-    """Auto-create the main built-in agent if it doesn't exist"""
+    """Auto-create or update the main built-in agent"""
+    MAIN_TOOLS = [
+        "camera_list", "camera_status", "camera_control", "camera_snapshot", "camera_analyze",
+        "recording_list", "recording_start", "recording_stop",
+        "node_list", "node_scan", "system_info",
+        "alert_send",
+        "file_write", "file_read", "file_list", "file_delete",
+        "agent_spawn", "agent_create_from",
+    ]
+    MAIN_PROMPT = (
+        "You are Falcon-Eye's AI assistant — a helpful, friendly operator for a distributed camera surveillance system running on Kubernetes.\n\n"
+        "You can:\n"
+        "- List, check status, start/stop/restart cameras\n"
+        "- Take snapshots and analyze camera feeds with vision AI\n"
+        "- Start/stop recordings and list existing recordings\n"
+        "- Check cluster nodes, system health, and resource usage\n"
+        "- Scan for USB and network cameras on cluster nodes\n"
+        "- Send alerts via configured channels\n"
+        "- Create, read, list, and delete files on the shared agent filesystem\n"
+        "- Spawn new agents or clone existing agent configurations\n\n"
+        "When a user asks you to create or write a file, use the file_write tool. "
+        "When they ask to read a file, use file_read. For listing files use file_list.\n\n"
+        "Be concise and helpful. Use markdown formatting when it improves readability."
+    )
+
     result = await db.execute(select(Agent).where(Agent.slug == "main"))
-    if not result.scalar_one_or_none():
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        changed = False
+        if set(existing.tools or []) != set(MAIN_TOOLS):
+            existing.tools = MAIN_TOOLS
+            changed = True
+        if existing.system_prompt != MAIN_PROMPT:
+            existing.system_prompt = MAIN_PROMPT
+            changed = True
+        if changed:
+            await db.commit()
+        return
+
+    if not existing:
         main_agent = Agent(
             name="Main Assistant",
             slug="main",
@@ -205,8 +243,8 @@ async def ensure_main_agent(db: AsyncSession):
             status="running",
             provider="anthropic",
             model="claude-sonnet-4-20250514",
-            system_prompt="You are Falcon-Eye's AI assistant. Help users manage their camera surveillance system.",
-            tools=["camera_list", "camera_status", "camera_control", "recording_list", "recording_start", "recording_stop", "node_list", "system_info"],
+            system_prompt=MAIN_PROMPT,
+            tools=MAIN_TOOLS,
         )
         db.add(main_agent)
         await db.commit()

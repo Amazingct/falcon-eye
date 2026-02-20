@@ -1,6 +1,8 @@
 """Agent chat API routes"""
+import asyncio
 import json
 import uuid
+from collections import defaultdict
 from typing import Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,6 +16,10 @@ from app.tools.registry import TOOLS_REGISTRY, get_tools_for_agent
 from app.tools.handlers import execute_tool
 
 router = APIRouter(prefix="/api/chat", tags=["agent-chat"])
+
+# Per-session locks: ensures messages within a session are processed one at a
+# time so the AI always sees its own previous response before handling the next.
+_session_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 class SendMessage(BaseModel):
@@ -56,7 +62,11 @@ async def send_message(
     data: SendMessage,
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a message to an agent and get LLM response"""
+    """Send a message to an agent and get LLM response.
+
+    Uses a per-session lock so messages are processed sequentially — the AI
+    always finishes responding before the next message is handled.
+    """
     # Get agent
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
@@ -64,82 +74,98 @@ async def send_message(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     session_id = data.session_id or str(uuid.uuid4())
+    lock_key = f"{agent_id}:{session_id}"
 
-    # Store user message
-    user_msg = AgentChatMessage(
-        agent_id=agent_id,
-        session_id=session_id,
-        role="user",
-        content=data.message,
-        source=data.source,
-        source_user=data.source_user,
-    )
-    db.add(user_msg)
-    await db.flush()
-
-    # Build messages for LLM
-    llm_messages = []
-
-    # System prompt
-    if agent.system_prompt:
-        llm_messages.append({"role": "system", "content": agent.system_prompt})
-
-    # For pod agents, load history; for main agent, stateless
-    if agent.type != "built-in":
-        history_result = await db.execute(
-            select(AgentChatMessage)
-            .where(AgentChatMessage.agent_id == agent_id, AgentChatMessage.session_id == session_id)
-            .order_by(AgentChatMessage.created_at.asc())
+    async with _session_locks[lock_key]:
+        # Store user message
+        user_msg = AgentChatMessage(
+            agent_id=agent_id,
+            session_id=session_id,
+            role="user",
+            content=data.message,
+            source=data.source,
+            source_user=data.source_user,
         )
-        history = history_result.scalars().all()
-        for msg in history:
-            llm_messages.append({"role": msg.role, "content": msg.content})
-    else:
-        # Stateless - just the current message
-        llm_messages.append({"role": "user", "content": data.message})
+        db.add(user_msg)
+        await db.flush()
 
-    # Get tools for this agent
-    agent_tools = agent.tools or []
-    tools_schema = get_tools_for_agent(agent_tools) if agent_tools else []
+        # Get tools for this agent
+        agent_tools = agent.tools or []
+        tools_schema = get_tools_for_agent(agent_tools) if agent_tools else []
 
-    # Build agent context for tool handlers that need LLM creds (e.g. camera_analyze)
-    # Resolve API key: per-agent DB key > shared ConfigMap env key
-    import os
-    resolved_key = agent.api_key_ref or ""
-    if not resolved_key:
-        if agent.provider == "anthropic":
-            resolved_key = os.getenv("ANTHROPIC_API_KEY", "")
-        elif agent.provider == "openai":
-            resolved_key = os.getenv("OPENAI_API_KEY", "")
+        # Build messages for LLM
+        llm_messages = []
 
-    agent_context = {
-        "provider": agent.provider,
-        "model": agent.model,
-        "api_key": resolved_key,
-    }
+        # System prompt — augment with tool awareness so the LLM reliably uses its tools
+        system_prompt = agent.system_prompt or "You are a helpful AI assistant."
+        if tools_schema:
+            tool_lines = []
+            for t in tools_schema:
+                fn = t["function"]
+                tool_lines.append(f"- **{fn['name']}**: {fn['description']}")
+            system_prompt += (
+                "\n\n## Available Tools\n"
+                "You MUST use the appropriate tool when the user's request matches one. "
+                "Do not describe what you would do — actually call the tool.\n\n"
+                + "\n".join(tool_lines)
+            )
+        llm_messages.append({"role": "system", "content": system_prompt})
 
-    # Call LLM
-    try:
-        response_text, prompt_tokens, completion_tokens = await _call_llm(
-            agent, llm_messages, tools_schema, agent_context=agent_context
+        # For pod agents, load history; for main agent, stateless
+        if agent.type != "built-in":
+            history_result = await db.execute(
+                select(AgentChatMessage)
+                .where(AgentChatMessage.agent_id == agent_id, AgentChatMessage.session_id == session_id)
+                .order_by(AgentChatMessage.created_at.asc())
+            )
+            history = history_result.scalars().all()
+            for msg in history:
+                llm_messages.append({"role": msg.role, "content": msg.content})
+        else:
+            # Stateless - just the current message
+            llm_messages.append({"role": "user", "content": data.message})
+
+        # Build agent context for tool handlers that need LLM creds (e.g. camera_analyze)
+        import os
+        resolved_key = agent.api_key_ref or ""
+        if not resolved_key:
+            if agent.provider == "anthropic":
+                resolved_key = os.getenv("ANTHROPIC_API_KEY", "")
+            elif agent.provider == "openai":
+                resolved_key = os.getenv("OPENAI_API_KEY", "")
+
+        agent_context = {
+            "provider": agent.provider,
+            "model": agent.model,
+            "api_key": resolved_key,
+        }
+
+        # Call LLM
+        try:
+            response_text, prompt_tokens, completion_tokens = await _call_llm(
+                agent, llm_messages, tools_schema, agent_context=agent_context
+            )
+        except Exception as e:
+            response_text = f"Error: {str(e)}"
+            prompt_tokens = None
+            completion_tokens = None
+
+        # Store assistant response
+        assistant_msg = AgentChatMessage(
+            agent_id=agent_id,
+            session_id=session_id,
+            role="assistant",
+            content=response_text,
+            source=data.source,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
-    except Exception as e:
-        response_text = f"Error: {str(e)}"
-        prompt_tokens = None
-        completion_tokens = None
+        db.add(assistant_msg)
+        await db.commit()
 
-    # Store assistant response
-    assistant_msg = AgentChatMessage(
-        agent_id=agent_id,
-        session_id=session_id,
-        role="assistant",
-        content=response_text,
-        source=data.source,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-    )
-    db.add(assistant_msg)
-    await db.commit()
+    # Clean up locks for sessions that are no longer active
+    if not _session_locks[lock_key].locked():
+        _session_locks.pop(lock_key, None)
 
     return {
         "response": response_text,
