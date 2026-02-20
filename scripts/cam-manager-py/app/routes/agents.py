@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.database import get_db
 from app.models.agent import Agent
 from app.services import k8s
+from app.tools.registry import TOOLS_REGISTRY
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -196,14 +197,7 @@ async def stop_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
 
 async def ensure_main_agent(db: AsyncSession):
     """Auto-create or update the main built-in agent"""
-    MAIN_TOOLS = [
-        "camera_list", "camera_status", "camera_control", "camera_snapshot", "camera_analyze",
-        "recording_list", "recording_start", "recording_stop",
-        "node_list", "node_scan", "system_info",
-        "alert_send",
-        "file_write", "file_read", "file_list", "file_delete",
-        "agent_spawn", "agent_create_from",
-    ]
+    MAIN_TOOLS = list(TOOLS_REGISTRY.keys())
     MAIN_PROMPT = (
         "You are Falcon-Eye's AI assistant — a helpful, friendly operator for a distributed camera surveillance system running on Kubernetes.\n\n"
         "You can:\n"
