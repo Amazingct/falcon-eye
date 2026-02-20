@@ -57,9 +57,11 @@ async def save_message(agent_id: str, session_id: str, role: str, content: str, 
         logger.error(f"Failed to save message: {e}")
 
 
-async def process_message(message_text: str, session_id: str, source: str = "telegram", source_user: str = None) -> str:
-    """Process an incoming message through the LLM with tool support"""
-    # Use the main API's chat endpoint which handles history, LLM calls, and tools
+async def process_message(message_text: str, session_id: str, source: str = "telegram", source_user: str = None) -> dict:
+    """Process an incoming message through the LLM with tool support.
+
+    Returns dict with 'response' (text) and optional 'media' (list of files to send).
+    """
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             res = await client.post(
@@ -72,13 +74,28 @@ async def process_message(message_text: str, session_id: str, source: str = "tel
                 },
             )
             if res.status_code == 200:
-                data = res.json()
-                return data.get("response", "No response")
+                return res.json()
             else:
-                return f"Error from API ({res.status_code}): {res.text[:200]}"
+                return {"response": f"Error from API ({res.status_code}): {res.text[:200]}"}
     except Exception as e:
         logger.error(f"Error processing message: {e}")
-        return f"Error: {e}"
+        return {"response": f"Error: {e}"}
+
+
+async def download_file(path: str) -> bytes | None:
+    """Download a file from the shared filesystem via the main API."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.get(f"{API_URL}/api/files/read/{path}")
+            if res.status_code == 200:
+                content_type = res.headers.get("content-type", "")
+                if "application/json" in content_type:
+                    data = res.json()
+                    return data.get("content", "").encode("utf-8") if "content" in data else None
+                return res.content
+    except Exception as e:
+        logger.error(f"Failed to download file {path}: {e}")
+    return None
 
 
 # ─── Telegram Bot ───────────────────────────────────────────
@@ -99,6 +116,33 @@ async def start_telegram_bot():
     # Track sessions per chat
     chat_sessions: dict[int, str] = {}
 
+    async def send_media_to_chat(chat, media_item, bot):
+        """Download a file from the API and send it via Telegram."""
+        file_path = media_item.get("path", "")
+        caption = media_item.get("caption", "")
+        media_type = media_item.get("media_type", "document")
+
+        file_bytes = await download_file(file_path)
+        if not file_bytes:
+            await chat.send_message(f"(could not download: {file_path})")
+            return
+
+        filename = os.path.basename(file_path)
+        import io
+        buf = io.BytesIO(file_bytes)
+        buf.name = filename
+
+        try:
+            if media_type == "photo":
+                await bot.send_photo(chat_id=chat.id, photo=buf, caption=caption or None)
+            elif media_type == "video":
+                await bot.send_video(chat_id=chat.id, video=buf, caption=caption or None)
+            else:
+                await bot.send_document(chat_id=chat.id, document=buf, caption=caption or None)
+        except Exception as e:
+            logger.error(f"Failed to send media {file_path}: {e}")
+            await chat.send_message(f"(failed to send {filename}: {e})")
+
     async def handle_message(update: Update, context):
         if not update.message or not update.message.text:
             return
@@ -107,25 +151,29 @@ async def start_telegram_bot():
         user = update.effective_user
         source_user = user.username or user.first_name if user else str(chat_id)
 
-        # One session per chat
         if chat_id not in chat_sessions:
             chat_sessions[chat_id] = str(uuid.uuid4())
 
         session_id = chat_sessions[chat_id]
 
-        # Show typing
         await update.message.chat.send_action("typing")
 
-        response = await process_message(
+        result = await process_message(
             update.message.text,
             session_id=session_id,
             source="telegram",
             source_user=source_user,
         )
 
-        # Split long messages (Telegram max 4096 chars)
-        for i in range(0, len(response), 4000):
-            await update.message.reply_text(response[i:i + 4000])
+        response_text = result.get("response", "")
+        media_items = result.get("media", [])
+
+        if response_text:
+            for i in range(0, len(response_text), 4000):
+                await update.message.reply_text(response_text[i:i + 4000])
+
+        for item in media_items:
+            await send_media_to_chat(update.effective_chat, item, context.bot)
 
     async def handle_start(update: Update, context):
         chat_id = update.effective_chat.id
@@ -216,8 +264,8 @@ async def webhook_handler(request: Request):
     if not message:
         return {"error": "No message provided"}
 
-    response = await process_message(message, session_id=session_id, source=source, source_user=source_user)
-    return {"response": response, "session_id": session_id}
+    result = await process_message(message, session_id=session_id, source=source, source_user=source_user)
+    return {"response": result.get("response", ""), "session_id": session_id, "media": result.get("media", [])}
 
 
 if __name__ == "__main__":

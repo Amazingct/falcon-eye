@@ -423,6 +423,44 @@ async def file_list(prefix: str = "", **kwargs) -> str:
         return f"Error listing files: {e}"
 
 
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
+
+async def send_media(path: str, caption: str = "", media_type: str = "auto", **kwargs) -> str:
+    """Queue a file from the shared filesystem for delivery to the user's chat."""
+    try:
+        info = await _api_get(f"/api/files/info/{path}")
+        if info.get("is_dir"):
+            return f"Error: '{path}' is a directory, not a file."
+
+        if media_type == "auto":
+            ext = os.path.splitext(path)[1].lower()
+            if ext in PHOTO_EXTENSIONS:
+                media_type = "photo"
+            elif ext in VIDEO_EXTENSIONS:
+                media_type = "video"
+            else:
+                media_type = "document"
+
+        media_entry = {
+            "path": path,
+            "caption": caption,
+            "media_type": media_type,
+            "size": info.get("size"),
+            "mime_type": info.get("mime_type"),
+        }
+
+        ctx = kwargs.get("_agent_context", {})
+        if "pending_media" in ctx:
+            ctx["pending_media"].append(media_entry)
+
+        return f"Media queued for delivery: {path} ({media_type}, {info.get('size', '?')} bytes)"
+    except Exception as e:
+        if "404" in str(e) or "not found" in str(e).lower():
+            return f"File not found: '{path}'. Use list_files to see available files, or write_file to create one first."
+        return f"Error preparing media: {e}"
+
+
 async def file_delete(path: str, **kwargs) -> str:
     """Delete a file from the shared agent filesystem."""
     try:
@@ -474,6 +512,7 @@ HANDLER_MAP = {
     "app.tools.handlers.file_read": file_read,
     "app.tools.handlers.file_list": file_list,
     "app.tools.handlers.file_delete": file_delete,
+    "app.tools.handlers.send_media": send_media,
 }
 
 

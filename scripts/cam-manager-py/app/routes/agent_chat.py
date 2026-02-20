@@ -138,6 +138,7 @@ async def send_message(
             "provider": agent.provider,
             "model": agent.model,
             "api_key": resolved_key,
+            "pending_media": [],
         }
 
         # Call LLM
@@ -149,6 +150,8 @@ async def send_message(
             response_text = f"Error: {str(e)}"
             prompt_tokens = None
             completion_tokens = None
+
+        pending_media = agent_context.get("pending_media", [])
 
         # Store assistant response
         assistant_msg = AgentChatMessage(
@@ -167,13 +170,16 @@ async def send_message(
     if not _session_locks[lock_key].locked():
         _session_locks.pop(lock_key, None)
 
-    return {
+    resp = {
         "response": response_text,
         "session_id": session_id,
         "timestamp": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
     }
+    if pending_media:
+        resp["media"] = pending_media
+    return resp
 
 
 @router.get("/{agent_id}/sessions")

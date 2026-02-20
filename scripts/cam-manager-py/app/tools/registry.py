@@ -249,6 +249,21 @@ TOOLS_REGISTRY = {
         },
         "handler": "app.tools.handlers.file_list",
     },
+    "send_media": {
+        "name": "send_media",
+        "description": "Send an image, video, or document from the shared filesystem to the user's chat. The file must already exist (use write_file or list_files first). For camera snapshots, use camera_snapshot then send the resulting file.",
+        "category": "messaging",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path in the shared filesystem (e.g. 'photos/snapshot.jpg')"},
+                "caption": {"type": "string", "description": "Caption to display with the media (optional)", "default": ""},
+                "media_type": {"type": "string", "enum": ["auto", "photo", "video", "document"], "description": "Force a specific media type, or 'auto' to detect from file extension", "default": "auto"},
+            },
+            "required": ["path"],
+        },
+        "handler": "app.tools.handlers.send_media",
+    },
     "file_delete": {
         "name": "delete_file",
         "description": "Delete a file from the shared agent filesystem.",
