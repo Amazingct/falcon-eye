@@ -1233,6 +1233,8 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
         setForm({
           default_resolution: data.default_resolution,
           default_framerate: data.default_framerate,
+          default_camera_node: data.default_camera_node || '',
+          default_recorder_node: data.default_recorder_node || '',
           cleanup_interval: data.cleanup_interval,
           creating_timeout_minutes: data.creating_timeout_minutes,
           chatbot_tools: data.chatbot?.enabled_tools || [],
@@ -1442,6 +1444,40 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                   </div>
 
                   <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Node Defaults</h3>
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Default Camera Node</label>
+                        <select
+                          value={form.default_camera_node}
+                          onChange={e => setForm({ ...form, default_camera_node: e.target.value })}
+                          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                        >
+                          <option value="">Auto (Kubernetes decides)</option>
+                          {nodes.map(node => (
+                            <option key={node.name} value={node.name}>{node.name} ({node.ip})</option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1.5">Where network camera pods are scheduled. USB cameras always run on their own node.</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Default Recorder Node</label>
+                        <select
+                          value={form.default_recorder_node}
+                          onChange={e => setForm({ ...form, default_recorder_node: e.target.value })}
+                          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                        >
+                          <option value="">Same as camera node</option>
+                          {nodes.map(node => (
+                            <option key={node.name} value={node.name}>{node.name} ({node.ip})</option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1.5">Where recorder pods run. Set to your master node to centralize recordings.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
                     <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">System Timers</h3>
                     <div className="space-y-5">
                       <div>
@@ -1474,6 +1510,8 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                     onClick={() => saveSettings({
                       default_resolution: form.default_resolution,
                       default_framerate: form.default_framerate,
+                      default_camera_node: form.default_camera_node,
+                      default_recorder_node: form.default_recorder_node,
                       cleanup_interval: form.cleanup_interval,
                       creating_timeout_minutes: form.creating_timeout_minutes,
                     })}

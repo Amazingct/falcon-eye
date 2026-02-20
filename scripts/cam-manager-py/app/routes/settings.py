@@ -58,6 +58,8 @@ class SettingsResponse(BaseModel):
     """Current settings"""
     default_resolution: str
     default_framerate: int
+    default_camera_node: str
+    default_recorder_node: str
     k8s_namespace: str
     cleanup_interval: str
     creating_timeout_minutes: int
@@ -69,6 +71,8 @@ class SettingsUpdate(BaseModel):
     """Settings update request"""
     default_resolution: Optional[str] = None
     default_framerate: Optional[int] = None
+    default_camera_node: Optional[str] = None
+    default_recorder_node: Optional[str] = None
     cleanup_interval: Optional[str] = None
     creating_timeout_minutes: Optional[int] = None
     anthropic_api_key: Optional[str] = None
@@ -165,6 +169,8 @@ async def get_current_settings():
     # Defaults from env/pydantic settings
     default_resolution = settings.default_resolution
     default_framerate = settings.default_framerate
+    default_camera_node = settings.default_camera_node
+    default_recorder_node = settings.default_recorder_node
     cleanup_interval = "*/10 * * * *"
     creating_timeout = 3
     
@@ -185,6 +191,8 @@ async def get_current_settings():
         if cm.data:
             default_resolution = cm.data.get("DEFAULT_RESOLUTION", default_resolution)
             default_framerate = int(cm.data.get("DEFAULT_FRAMERATE", default_framerate))
+            default_camera_node = cm.data.get("DEFAULT_CAMERA_NODE", default_camera_node)
+            default_recorder_node = cm.data.get("DEFAULT_RECORDER_NODE", default_recorder_node)
             cleanup_interval = cm.data.get("CLEANUP_INTERVAL", cleanup_interval)
             creating_timeout = int(cm.data.get("CREATING_TIMEOUT_MINUTES", creating_timeout))
             # Chatbot tools from config
@@ -204,6 +212,8 @@ async def get_current_settings():
     return SettingsResponse(
         default_resolution=default_resolution,
         default_framerate=default_framerate,
+        default_camera_node=default_camera_node,
+        default_recorder_node=default_recorder_node,
         k8s_namespace=settings.k8s_namespace,
         cleanup_interval=cleanup_interval,
         creating_timeout_minutes=creating_timeout,
@@ -245,6 +255,10 @@ async def update_settings(update: SettingsUpdate):
         config_data["DEFAULT_RESOLUTION"] = update.default_resolution
     if update.default_framerate:
         config_data["DEFAULT_FRAMERATE"] = str(update.default_framerate)
+    if update.default_camera_node is not None:
+        config_data["DEFAULT_CAMERA_NODE"] = update.default_camera_node
+    if update.default_recorder_node is not None:
+        config_data["DEFAULT_RECORDER_NODE"] = update.default_recorder_node
     if update.cleanup_interval:
         config_data["CLEANUP_INTERVAL"] = update.cleanup_interval
     if update.creating_timeout_minutes:
