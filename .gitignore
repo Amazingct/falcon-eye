@@ -8,7 +8,7 @@ venv/
 # Environment files (contain secrets)
 .env
 .env.local
-.env.production
+# Note: .env.production is committed (no secrets, just /api path)
 
 # Logs
 *.log

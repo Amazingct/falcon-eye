@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight, Key, Server, Bot, ArrowLeft, AlertTriangle, Network } from 'lucide-react'
 
-const API_URL = window.API_URL || '/api'
+const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
 function App() {
   const [cameras, setCameras] = useState([])
