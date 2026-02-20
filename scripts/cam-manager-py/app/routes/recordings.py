@@ -1,6 +1,6 @@
 """Recordings API routes"""
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from pydantic import BaseModel
@@ -8,8 +8,10 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 import os
+import httpx
 
 from app.database import get_db
+from app.config import get_settings
 from app.models.recording import Recording, RecordingStatus
 
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
@@ -209,12 +211,40 @@ async def delete_recording(
     return {"message": "Recording deleted", "id": recording_id}
 
 
+async def _find_file_via_recorders(camera_id: str, file_name: str) -> Optional[str]:
+    """Search all recorder pods for a recording file. Returns the URL if found."""
+    settings = get_settings()
+    try:
+        from app.services.k8s import core_api
+        services = core_api.list_namespaced_service(
+            namespace=settings.k8s_namespace,
+            label_selector="component=recorder",
+        )
+        for svc in services.items:
+            svc_url = f"http://{svc.metadata.name}.{settings.k8s_namespace}.svc.cluster.local:8080"
+            try:
+                async with httpx.AsyncClient(timeout=5) as client:
+                    res = await client.head(f"{svc_url}/files/{camera_id}/{file_name}")
+                    if res.status_code == 200:
+                        return f"{svc_url}/files/{camera_id}/{file_name}"
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"Error searching recorder pods: {e}")
+    return None
+
+
 @router.get("/{recording_id}/download")
 async def download_recording(
     recording_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Download a recording file"""
+    """Download a recording file.
+    
+    Strategy:
+    1. Try serving from local volume (works when API and recorder share a node)
+    2. Proxy through the recorder pod that has the file (multi-node)
+    """
     result = await db.execute(
         select(Recording).where(Recording.id == recording_id)
     )
@@ -223,11 +253,43 @@ async def download_recording(
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
     
-    if not recording.file_path or not os.path.exists(recording.file_path):
-        raise HTTPException(status_code=404, detail="Recording file not found")
+    if not recording.file_path:
+        raise HTTPException(status_code=404, detail="No file path for this recording")
     
-    return FileResponse(
-        recording.file_path,
+    # 1. Try local file first (same node or shared storage)
+    if os.path.exists(recording.file_path):
+        return FileResponse(
+            recording.file_path,
+            media_type="video/mp4",
+            filename=recording.file_name,
+        )
+    
+    # 2. File not on this node — proxy through a recorder pod that has it
+    camera_id = str(recording.camera_id) if recording.camera_id else None
+    if not camera_id or not recording.file_name:
+        raise HTTPException(
+            status_code=404,
+            detail="Recording file not found on this node and cannot locate it remotely"
+        )
+    
+    remote_url = await _find_file_via_recorders(camera_id, recording.file_name)
+    if not remote_url:
+        raise HTTPException(
+            status_code=404,
+            detail="Recording file not found on any node. The recorder pod may have been restarted."
+        )
+    
+    # Stream the file from the recorder pod back to the client
+    async def stream_from_recorder():
+        async with httpx.AsyncClient(timeout=300) as client:
+            async with client.stream("GET", remote_url) as response:
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    yield chunk
+
+    return StreamingResponse(
+        stream_from_recorder(),
         media_type="video/mp4",
-        filename=recording.file_name,
+        headers={
+            "Content-Disposition": f'attachment; filename="{recording.file_name}"',
+        },
     )

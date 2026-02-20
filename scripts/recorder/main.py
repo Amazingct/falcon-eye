@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
 
@@ -322,6 +323,32 @@ async def stop_recording() -> StopResponse:
             current_process = None
             current_recording = None
             raise HTTPException(status_code=500, detail=f"Failed to stop recording: {e}")
+
+
+@app.get("/files/{camera_id}/{filename}")
+async def serve_recording_file(camera_id: str, filename: str):
+    """Serve a recording file from this node's local storage.
+    Used by the API to proxy downloads from whichever node holds the file."""
+    file_path = os.path.join(RECORDINGS_PATH, camera_id, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on this node")
+    return FileResponse(file_path, media_type="video/mp4", filename=filename)
+
+
+@app.get("/files")
+async def list_local_files():
+    """List all recording files on this node (for debugging)"""
+    files = []
+    for cam_dir in Path(RECORDINGS_PATH).iterdir():
+        if cam_dir.is_dir():
+            for f in cam_dir.iterdir():
+                if f.is_file():
+                    files.append({
+                        "camera_id": cam_dir.name,
+                        "filename": f.name,
+                        "size_bytes": f.stat().st_size,
+                    })
+    return {"node_camera_id": CAMERA_ID, "files": files}
 
 
 @app.on_event("shutdown")
