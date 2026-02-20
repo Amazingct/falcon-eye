@@ -13,6 +13,7 @@ from app.routes.agents import router as agents_router
 from app.routes.agent_chat import router as agent_chat_router
 from app.routes.cron_routes import router as cron_router
 from app.routes.tools import router as tools_router
+from app.routes.files import router as files_router
 from app.chatbot import router as chatbot_router
 from app.models.schemas import HealthResponse
 
@@ -92,6 +93,7 @@ app.include_router(agents_router)
 app.include_router(agent_chat_router)
 app.include_router(cron_router)
 app.include_router(tools_router)
+app.include_router(files_router)
 app.include_router(chatbot_router)
 
 

@@ -377,6 +377,63 @@ async def _vision_anthropic(api_key: str, model: str, b64_images: list[str], pro
         return " ".join(text_blocks) if text_blocks else "(no description returned)"
 
 
+async def file_write(path: str, content: str, **kwargs) -> str:
+    """Write text content to a file in the shared agent filesystem."""
+    try:
+        result = await _api_post("/api/files/write", {"path": path, "content": content})
+        return f"File written: {path} ({result.get('size', '?')} bytes)"
+    except Exception as e:
+        return f"Error writing file: {e}"
+
+
+async def file_read(path: str, **kwargs) -> str:
+    """Read a text file from the shared agent filesystem."""
+    try:
+        result = await _api_get(f"/api/files/read/{path}")
+        if "content" in result:
+            return f"File: {path} ({result.get('size', '?')} bytes)\n---\n{result['content']}"
+        return f"File {path} is binary ({result.get('mime_type', 'unknown type')}), cannot display as text."
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
+async def file_list(prefix: str = "", **kwargs) -> str:
+    """List files and directories in the shared agent filesystem."""
+    try:
+        result = await _api_get(f"/api/files/?prefix={prefix}")
+        files = result.get("files", [])
+        if not files:
+            return f"No files found in '{prefix or '/'}'."
+        lines = []
+        for f in files:
+            if f["is_dir"]:
+                lines.append(f"  [DIR]  {f['name']}/")
+            else:
+                size = f.get("size", 0)
+                unit = "B"
+                if size > 1024 * 1024:
+                    size = size / (1024 * 1024)
+                    unit = "MB"
+                elif size > 1024:
+                    size = size / 1024
+                    unit = "KB"
+                lines.append(f"  {f['name']}  ({size:.1f} {unit})")
+        return f"Files in '{prefix or '/'}':\n" + "\n".join(lines)
+    except Exception as e:
+        return f"Error listing files: {e}"
+
+
+async def file_delete(path: str, **kwargs) -> str:
+    """Delete a file from the shared agent filesystem."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.delete(f"{API_BASE}/api/files/{path}")
+            result = res.json()
+        return result.get("message", f"Deleted: {path}")
+    except Exception as e:
+        return f"Error deleting file: {e}"
+
+
 async def custom_api_call(url: str, method: str = "GET", body: str = None, **kwargs) -> str:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -413,6 +470,10 @@ HANDLER_MAP = {
     "app.tools.handlers.spawn_agent": spawn_agent,
     "app.tools.handlers.clone_agent": clone_agent,
     "app.tools.handlers.analyze_camera": analyze_camera,
+    "app.tools.handlers.file_write": file_write,
+    "app.tools.handlers.file_read": file_read,
+    "app.tools.handlers.file_list": file_list,
+    "app.tools.handlers.file_delete": file_delete,
 }
 
 

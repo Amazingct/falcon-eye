@@ -3,6 +3,7 @@ import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, Ale
 import AgentsPage from './components/AgentsPage'
 import CronJobsPage from './components/CronJobsPage'
 import AgentChat from './components/AgentChat'
+import AgentDetailPage from './components/AgentDetailPage'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -1336,6 +1337,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
   const [form, setForm] = useState({})
+  const [selectedAgentId, setSelectedAgentId] = useState(null)
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -1423,10 +1425,9 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
 
   const navSections = [
     { id: 'camera', label: 'Camera Settings', icon: Camera, description: 'Defaults & timers' },
-    { id: 'api', label: 'API Settings', icon: Key, description: 'External integrations' },
     { id: 'nodes', label: 'Nodes & Cluster', icon: Server, description: 'Kubernetes management' },
-    { id: 'chatbot', label: 'Chatbot', icon: Bot, description: 'AI assistant config' },
-    { id: 'agents', label: 'Agents', icon: Bot, description: 'Manage AI agents' },
+    { id: 'agents', label: 'Agents', icon: Bot, description: 'AI agents & API key' },
+    { id: 'chatbot', label: 'Chatbot', icon: Bot, description: 'AI assistant tools' },
     { id: 'cron', label: 'Cron Jobs', icon: Clock, description: 'Scheduled tasks' },
   ]
 
@@ -1452,7 +1453,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
           {navSections.map(({ id, label, description, icon: Icon }) => (
             <button
               key={id}
-              onClick={() => setActiveSection(id)}
+              onClick={() => { setActiveSection(id); setSelectedAgentId(null) }}
               className={`w-full flex items-start space-x-3 px-3 py-3 rounded-lg text-left transition ${
                 activeSection === id
                   ? 'bg-blue-600 text-white'
@@ -1486,10 +1487,10 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-y-auto bg-gray-900">
+      <div className="flex-1 flex flex-col overflow-hidden bg-gray-900">
         {/* Sticky status banner */}
         {(error || message) && (
-          <div className="sticky top-0 z-10 px-8 pt-4">
+          <div className="px-8 pt-4 flex-shrink-0">
             {error && (
               <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg flex items-center justify-between mb-2 backdrop-blur-sm">
                 <div className="flex items-center space-x-2">
@@ -1511,6 +1512,10 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
           </div>
         )}
 
+        {selectedAgentId && activeSection === 'agents' ? (
+          <AgentDetailPage agentId={selectedAgentId} onBack={() => setSelectedAgentId(null)} />
+        ) : (
+        <div className="flex-1 overflow-y-auto">
         <div className="p-8 max-w-3xl">
           {loading ? (
             <div className="flex items-center justify-center h-64">
@@ -1640,63 +1645,6 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                 </div>
               )}
 
-              {/* ── API Settings ── */}
-              {activeSection === 'api' && (
-                <div className="space-y-8">
-                  <div>
-                    <h2 className="text-2xl font-bold">API Settings</h2>
-                    <p className="text-gray-400 mt-1">Manage external API integrations and credentials</p>
-                  </div>
-
-                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-5">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Anthropic API</h3>
-                      {settings?.chatbot?.api_key_configured ? (
-                        <span className="flex items-center space-x-1.5 text-xs bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full border border-green-500/30">
-                          <CheckCircle className="h-3 w-3" />
-                          <span>Configured</span>
-                        </span>
-                      ) : (
-                        <span className="flex items-center space-x-1.5 text-xs bg-yellow-500/15 text-yellow-400 px-2.5 py-1 rounded-full border border-yellow-500/30">
-                          <AlertCircle className="h-3 w-3" />
-                          <span>Not Configured</span>
-                        </span>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Anthropic API Key</label>
-                      <input
-                        type="password"
-                        value={form.anthropic_api_key || ''}
-                        onChange={e => setForm({ ...form, anthropic_api_key: e.target.value })}
-                        placeholder={settings?.chatbot?.api_key_configured ? '••••••••••••••••  (leave blank to keep current)' : 'sk-ant-api03-…'}
-                        className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 font-mono text-sm"
-                      />
-                      <p className="text-xs text-gray-500 mt-1.5">
-                        Required for the AI chatbot assistant. Stored securely as a Kubernetes secret.
-                      </p>
-                    </div>
-
-                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
-                      <p className="text-sm text-blue-300 font-medium mb-1">How to get an API key</p>
-                      <p className="text-xs text-blue-200/70 leading-relaxed">
-                        Visit <span className="font-mono bg-blue-500/20 px-1 rounded">console.anthropic.com</span> to create an account and generate an API key. Keys start with <span className="font-mono bg-blue-500/20 px-1 rounded">sk-ant-</span>. After saving, go to <strong>Nodes &amp; Cluster</strong> and click <strong>Restart All</strong> to apply the key.
-                      </p>
-                    </div>
-
-                    <button
-                      onClick={() => saveSettings({ anthropic_api_key: form.anthropic_api_key })}
-                      disabled={saving || !form.anthropic_api_key}
-                      className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/40 disabled:cursor-not-allowed px-6 py-2.5 rounded-lg transition font-medium"
-                    >
-                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Key className="h-4 w-4" />}
-                      <span>{saving ? 'Saving…' : 'Save API Key'}</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {/* ── Nodes & Cluster Management ── */}
               {activeSection === 'nodes' && (
                 <div className="space-y-8">
@@ -1816,7 +1764,54 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
               {/* ── Chatbot ── */}
               {activeSection === 'agents' && (
                 <div className="space-y-8">
-                  <AgentsPage />
+                  <div>
+                    <h2 className="text-2xl font-bold">Agents</h2>
+                    <p className="text-gray-400 mt-1">Manage AI agents and global API configuration</p>
+                  </div>
+
+                  {/* Global API Key */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-5">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Global Anthropic API Key</h3>
+                      {settings?.chatbot?.api_key_configured ? (
+                        <span className="flex items-center space-x-1.5 text-xs bg-green-500/15 text-green-400 px-2.5 py-1 rounded-full border border-green-500/30">
+                          <CheckCircle className="h-3 w-3" />
+                          <span>Configured</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center space-x-1.5 text-xs bg-yellow-500/15 text-yellow-400 px-2.5 py-1 rounded-full border border-yellow-500/30">
+                          <AlertCircle className="h-3 w-3" />
+                          <span>Not Configured</span>
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-gray-500 leading-relaxed">
+                      Set during install. All agents use this key by default unless overridden with a per-agent key.
+                    </p>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Update API Key</label>
+                      <input
+                        type="password"
+                        value={form.anthropic_api_key || ''}
+                        onChange={e => setForm({ ...form, anthropic_api_key: e.target.value })}
+                        placeholder={settings?.chatbot?.api_key_configured ? '••••••••••••••••  (leave blank to keep current)' : 'sk-ant-api03-…'}
+                        className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 font-mono text-sm"
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => saveSettings({ anthropic_api_key: form.anthropic_api_key })}
+                      disabled={saving || !form.anthropic_api_key}
+                      className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/40 disabled:cursor-not-allowed px-6 py-2.5 rounded-lg transition font-medium text-sm"
+                    >
+                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Key className="h-4 w-4" />}
+                      <span>{saving ? 'Saving…' : 'Save API Key'}</span>
+                    </button>
+                  </div>
+
+                  <AgentsPage onSelectAgent={(id) => setSelectedAgentId(id)} />
                 </div>
               )}
 
@@ -1830,26 +1825,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                 <div className="space-y-8">
                   <div>
                     <h2 className="text-2xl font-bold">Chatbot</h2>
-                    <p className="text-gray-400 mt-1">Configure the Falcon-Eye AI assistant powered by Claude</p>
-                  </div>
-
-                  {/* Status card */}
-                  <div className={`rounded-xl border p-5 ${settings?.chatbot?.api_key_configured ? 'bg-green-950/20 border-green-700/40' : 'bg-yellow-950/20 border-yellow-700/40'}`}>
-                    <div className="flex items-start space-x-4">
-                      <div className={`p-2.5 rounded-lg ${settings?.chatbot?.api_key_configured ? 'bg-green-500/20' : 'bg-yellow-500/20'}`}>
-                        <Bot className={`h-5 w-5 ${settings?.chatbot?.api_key_configured ? 'text-green-400' : 'text-yellow-400'}`} />
-                      </div>
-                      <div>
-                        <p className={`font-semibold ${settings?.chatbot?.api_key_configured ? 'text-green-300' : 'text-yellow-300'}`}>
-                          {settings?.chatbot?.api_key_configured ? 'Chatbot Ready' : 'Chatbot Not Configured'}
-                        </p>
-                        <p className="text-xs text-gray-400 mt-1 leading-relaxed">
-                          {settings?.chatbot?.api_key_configured
-                            ? 'Anthropic API key is configured. The assistant is ready to use.'
-                            : 'Add an Anthropic API key under API Settings to enable the chatbot, then restart deployments.'}
-                        </p>
-                      </div>
-                    </div>
+                    <p className="text-gray-400 mt-1">Configure which tools the built-in AI assistant can use</p>
                   </div>
 
                   {/* Tool toggles */}
@@ -1908,6 +1884,8 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
             </>
           )}
         </div>
+        </div>
+        )}
       </div>
     </div>
   )

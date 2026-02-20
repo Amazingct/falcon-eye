@@ -206,6 +206,18 @@ async def get_current_settings():
     except ValueError:
         pass  # Invalid int conversion, use defaults
     
+    # Also check K8s Secret for API key (set via dashboard save)
+    if not api_key_configured:
+        try:
+            secret = core_api.read_namespaced_secret(
+                name="falcon-eye-secrets",
+                namespace=settings.k8s_namespace,
+            )
+            if secret.data and secret.data.get("ANTHROPIC_API_KEY"):
+                api_key_configured = True
+        except ApiException:
+            pass
+    
     # Auto-discovered node IPs from K8s API
     node_ips = settings.node_ips
     

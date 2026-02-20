@@ -613,6 +613,8 @@ $([ -n "$API_NODE" ] && echo "      nodeSelector:
         volumeMounts:
         - name: recordings
           mountPath: /recordings
+        - name: agent-files
+          mountPath: /agent-files
         resources:
           requests:
             memory: "128Mi"
@@ -624,6 +626,10 @@ $([ -n "$API_NODE" ] && echo "      nodeSelector:
       - name: recordings
         hostPath:
           path: /data/falcon-eye/recordings
+          type: DirectoryOrCreate
+      - name: agent-files
+        hostPath:
+          path: /data/falcon-eye/agent-files
           type: DirectoryOrCreate
 ---
 apiVersion: v1

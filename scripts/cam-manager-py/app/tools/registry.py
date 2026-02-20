@@ -210,6 +210,58 @@ TOOLS_REGISTRY = {
         },
         "handler": "app.tools.handlers.custom_api_call",
     },
+    "file_write": {
+        "name": "write_file",
+        "description": "Write text content to a file in the shared agent filesystem. Creates parent directories automatically. Use paths like 'notes/report.txt' or 'data/output.json'.",
+        "category": "filesystem",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to the shared root (e.g. 'notes/report.txt')"},
+                "content": {"type": "string", "description": "Text content to write"},
+            },
+            "required": ["path", "content"],
+        },
+        "handler": "app.tools.handlers.file_write",
+    },
+    "file_read": {
+        "name": "read_file",
+        "description": "Read the contents of a text file from the shared agent filesystem.",
+        "category": "filesystem",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path relative to the shared root (e.g. 'notes/report.txt')"},
+            },
+            "required": ["path"],
+        },
+        "handler": "app.tools.handlers.file_read",
+    },
+    "file_list": {
+        "name": "list_files",
+        "description": "List files and directories in the shared agent filesystem. Use a prefix to browse subdirectories.",
+        "category": "filesystem",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prefix": {"type": "string", "description": "Directory path to list (empty for root)", "default": ""},
+            },
+        },
+        "handler": "app.tools.handlers.file_list",
+    },
+    "file_delete": {
+        "name": "delete_file",
+        "description": "Delete a file from the shared agent filesystem.",
+        "category": "filesystem",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path to delete"},
+            },
+            "required": ["path"],
+        },
+        "handler": "app.tools.handlers.file_delete",
+    },
 }
 
 

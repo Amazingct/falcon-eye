@@ -3,7 +3,7 @@ import { Bot, Plus, Trash2, Play, Square, Edit, RefreshCw, Loader2, Save, X, Ale
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
-export default function AgentsPage() {
+export default function AgentsPage({ onSelectAgent }) {
   const [agents, setAgents] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -130,14 +130,14 @@ export default function AgentsPage() {
       ) : (
         <div className="space-y-3">
           {sorted.map(agent => (
-            <div key={agent.id} className="bg-gray-800 rounded-lg border border-gray-700 p-4 flex items-center justify-between hover:border-gray-600 transition-colors">
+            <div key={agent.id} className="bg-gray-800 rounded-lg border border-gray-700 p-4 flex items-center justify-between hover:border-gray-600 transition-colors cursor-pointer group" onClick={() => onSelectAgent?.(agent.id)}>
               <div className="flex items-center space-x-4 min-w-0">
                 <div className={`p-2 rounded-lg ${agent.status === 'running' ? 'bg-green-500/20' : 'bg-gray-700'}`}>
                   <Bot className={`h-5 w-5 ${agent.status === 'running' ? 'text-green-400' : 'text-gray-400'}`} />
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center space-x-2">
-                    <h3 className="font-semibold truncate">{agent.name}</h3>
+                    <h3 className="font-semibold truncate group-hover:text-blue-400 transition-colors">{agent.name}</h3>
                     {agent.slug === 'main' && (
                       <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">Built-in</span>
                     )}
@@ -150,7 +150,7 @@ export default function AgentsPage() {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center space-x-2 flex-shrink-0">
+              <div className="flex items-center space-x-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                 {agent.status === 'running' ? (
                   <button onClick={() => stopAgent(agent.id)} className="p-2 rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 transition" title="Stop" disabled={agent.type === 'built-in'}>
                     <Square className="h-4 w-4" />
@@ -198,8 +198,8 @@ function AgentModal({ agent, onClose, onSave }) {
     name: agent?.name || '',
     slug: agent?.slug || '',
     type: agent?.type || 'pod',
-    provider: agent?.provider || 'openai',
-    model: agent?.model || 'gpt-4o',
+    provider: agent?.provider || 'anthropic',
+    model: agent?.model || 'claude-sonnet-4-20250514',
     api_key_ref: agent?.api_key_ref || '',
     system_prompt: agent?.system_prompt || '',
     temperature: agent?.temperature ?? 0.7,
@@ -309,8 +309,8 @@ function AgentModal({ agent, onClose, onSave }) {
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">Provider</label>
               <select value={form.provider} onChange={e => setForm({ ...form, provider: e.target.value })} className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500">
-                <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
                 <option value="ollama">Ollama</option>
               </select>
             </div>
@@ -321,8 +321,9 @@ function AgentModal({ agent, onClose, onSave }) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">API Key</label>
-            <input type="password" value={form.api_key_ref} onChange={e => setForm({ ...form, api_key_ref: e.target.value })} placeholder="sk-..." className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono text-sm" />
+            <label className="block text-sm font-medium text-gray-300 mb-1">API Key <span className="text-gray-500 font-normal">(optional)</span></label>
+            <input type="password" value={form.api_key_ref} onChange={e => setForm({ ...form, api_key_ref: e.target.value })} placeholder="Leave blank to use global key" className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono text-sm" />
+            <p className="text-xs text-gray-500 mt-1">Uses the global API key from install unless overridden here</p>
           </div>
 
           <div>
