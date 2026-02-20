@@ -416,7 +416,7 @@ data:
   DATABASE_URL: "postgresql://falcon:falcon-eye-2026@postgres:5432/falconeye"
   NODE_ENV: "production"
   CLEANUP_INTERVAL: "*/2 * * * *"
-  CREATING_TIMEOUT_MINUTES: "3"
+  CREATING_TIMEOUT_MINUTES: "15"
   DEFAULT_RESOLUTION: "640x480"
   DEFAULT_FRAMERATE: "15"
   ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
