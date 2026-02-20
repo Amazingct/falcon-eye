@@ -83,6 +83,7 @@ Each camera gets its own Deployment + NodePort Service. Two types:
 - **Image**: `ghcr.io/amazingct/falcon-eye-camera-rtsp:latest`
 - **Base**: Python 3.11-slim with FFmpeg + Flask
 - **Port**: 8081 (MJPEG stream converted from RTSP via FFmpeg)
+- **Stream endpoints**: Serves MJPEG at both `/` and `/stream` with proper multipart boundary framing (`--frame\r\n`)
 - **ONVIF**: Resolves ONVIF URLs to RTSP using `onvif-zeep` library
 - **Can** run on any node (uses default camera node if configured)
 
@@ -95,7 +96,7 @@ Each camera gets a paired recorder Deployment + ClusterIP Service:
 - **Port**: 8080 (ClusterIP — only API server communicates with it)
 - **Recording behavior**:
   - USB cameras (MJPEG source): re-encodes to H.264 MP4 with `libx264 ultrafast`
-  - RTSP cameras: copies video stream (`-c:v copy`), transcodes audio to AAC
+  - RTSP cameras: copies video stream as-is (`-c:v copy`) and transcodes audio to AAC (`-c:a aac -b:a 64k`). This handles cameras (e.g., Tuya devices) that output incompatible audio codecs like `pcm_mulaw` which MP4 containers don't support
 - **Storage**: hostPath at `/data/falcon-eye/recordings/{camera_id}/`
 - **Reports** to the API server when recordings start/stop/fail
 
@@ -191,6 +192,10 @@ Camera services request NodePort without specifying a number — Kubernetes auto
 
 Permissions: full CRUD on pods, services, configmaps, secrets, deployments, cronjobs, jobs; read on nodes.
 
+## Node IP Auto-Discovery
+
+The API server **auto-discovers node IP addresses** by querying the Kubernetes API for each node's `InternalIP` address. Results are cached with a 5-minute TTL for performance. Stream URLs (e.g., `http://<node-ip>:<nodeport>`) are built dynamically — no hardcoded IP mappings are needed.
+
 ## Node Selection Logic
 
 1. **USB cameras**: **Must** be pinned to the node where the USB device is physically connected (`nodeSelector: kubernetes.io/hostname`)
@@ -199,7 +204,7 @@ Permissions: full CRUD on pods, services, configmaps, secrets, deployments, cron
 
 ### Jetson Node Tolerations
 
-Nodes listed in `JETSON_NODES` (default: `["ace", "falcon"]`) are assumed to have a taint:
+Nodes listed in `JETSON_NODES` (configurable via environment variable, defaults to empty `[]`) are assumed to have a taint:
 
 ```yaml
 tolerations:

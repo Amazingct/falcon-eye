@@ -4,9 +4,13 @@
 
 ## Quick Start
 
+One command. That's it.
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh | bash
 ```
+
+Open the dashboard URL printed at the end, and manage everything from the web UI.
 
 ## Documentation Index
 
@@ -28,7 +32,7 @@ curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh
 - **Camera scanning**: Auto-discover USB devices and network cameras
 - **AI Chatbot**: Claude-powered assistant for camera management (optional)
 - **Self-healing**: Automatic cleanup of orphaned pods and stale resources
-- **Multi-arch**: Runs on both amd64 and arm64 (including Jetson devices)
+- **Multi-arch**: Runs on both amd64 and arm64 (including NVIDIA Jetson) — container runtime auto-selects the right image
 
 ## Repository
 
