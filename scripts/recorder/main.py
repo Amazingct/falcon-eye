@@ -211,13 +211,18 @@ async def start_recording() -> StartResponse:
                 file_path,
             ]
         else:
-            # HLS/RTSP stream - can often copy codecs
+            # HLS/RTSP stream - copy video, transcode audio to AAC
+            # Some cameras output audio codecs (e.g. pcm_mulaw) that MP4
+            # containers don't support, so we transcode audio to AAC.
+            # If there's no audio stream, ffmpeg ignores the audio flags.
             cmd = [
                 "ffmpeg",
                 "-y",  # Overwrite output
                 "-rtsp_transport", "tcp",  # Use TCP for RTSP (more reliable)
                 "-i", STREAM_URL,
-                "-c", "copy",  # No re-encoding (fast)
+                "-c:v", "copy",  # No re-encoding for video (fast)
+                "-c:a", "aac",  # Transcode audio to AAC (MP4 compatible)
+                "-b:a", "64k",  # Audio bitrate
                 "-t", str(SEGMENT_DURATION),  # Max duration
                 "-movflags", "+faststart",  # Web-optimized
                 "-f", "mp4",
