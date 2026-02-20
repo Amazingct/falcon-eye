@@ -1,0 +1,250 @@
+"""Tools registry - defines all available tools for agents"""
+
+TOOLS_REGISTRY = {
+    "camera_list": {
+        "name": "list_cameras",
+        "description": "Get all cameras and their current status",
+        "category": "cameras",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": "app.tools.handlers.list_cameras",
+    },
+    "camera_status": {
+        "name": "camera_status",
+        "description": "Check if a specific camera is online",
+        "category": "cameras",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string", "description": "Camera UUID"},
+            },
+            "required": ["camera_id"],
+        },
+        "handler": "app.tools.handlers.camera_status",
+    },
+    "camera_control": {
+        "name": "control_camera",
+        "description": "Start, stop, or restart a camera",
+        "category": "cameras",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string", "description": "Camera UUID"},
+                "action": {"type": "string", "enum": ["start", "stop", "restart"], "description": "Action to perform"},
+            },
+            "required": ["camera_id", "action"],
+        },
+        "handler": "app.tools.handlers.control_camera",
+    },
+    "camera_snapshot": {
+        "name": "camera_snapshot",
+        "description": "Grab a frame/snapshot from a camera",
+        "category": "cameras",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string", "description": "Camera UUID"},
+            },
+            "required": ["camera_id"],
+        },
+        "handler": "app.tools.handlers.camera_snapshot",
+    },
+    "recording_start": {
+        "name": "start_recording",
+        "description": "Start recording on a camera",
+        "category": "recording",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string", "description": "Camera UUID"},
+            },
+            "required": ["camera_id"],
+        },
+        "handler": "app.tools.handlers.start_recording",
+    },
+    "recording_stop": {
+        "name": "stop_recording",
+        "description": "Stop an active recording on a camera",
+        "category": "recording",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string", "description": "Camera UUID"},
+            },
+            "required": ["camera_id"],
+        },
+        "handler": "app.tools.handlers.stop_recording",
+    },
+    "recording_list": {
+        "name": "list_recordings",
+        "description": "Get all recordings, optionally filtered by camera",
+        "category": "recording",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string", "description": "Filter by camera UUID (optional)"},
+            },
+        },
+        "handler": "app.tools.handlers.list_recordings",
+    },
+    "node_list": {
+        "name": "list_nodes",
+        "description": "Get cluster nodes and their health status",
+        "category": "system",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": "app.tools.handlers.list_nodes",
+    },
+    "node_scan": {
+        "name": "scan_cameras",
+        "description": "Scan cluster nodes for USB and network cameras",
+        "category": "system",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "network": {"type": "boolean", "description": "Include network scan", "default": True},
+            },
+        },
+        "handler": "app.tools.handlers.scan_cameras",
+    },
+    "system_info": {
+        "name": "system_info",
+        "description": "Get cluster resource usage and pod status",
+        "category": "system",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": "app.tools.handlers.system_info",
+    },
+    "alert_send": {
+        "name": "send_alert",
+        "description": "Send an alert via configured channels",
+        "category": "alerts",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Alert message"},
+                "severity": {"type": "string", "enum": ["info", "warning", "critical"], "default": "info"},
+            },
+            "required": ["message"],
+        },
+        "handler": "app.tools.handlers.send_alert",
+    },
+    "web_search": {
+        "name": "web_search",
+        "description": "Search the web (requires API key)",
+        "category": "external",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+            },
+            "required": ["query"],
+        },
+        "handler": "app.tools.handlers.web_search",
+    },
+    "agent_spawn": {
+        "name": "spawn_agent",
+        "description": "Create and start a new agent with specified config",
+        "category": "agents",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Agent display name"},
+                "type": {"type": "string", "enum": ["telegram", "webhook", "custom"], "description": "Agent channel type"},
+                "provider": {"type": "string", "enum": ["openai", "anthropic", "ollama"], "description": "LLM provider"},
+                "model": {"type": "string", "description": "Model name (e.g. gpt-4o, claude-sonnet-4-20250514)"},
+                "system_prompt": {"type": "string", "description": "System prompt for the agent"},
+                "tools": {"type": "array", "items": {"type": "string"}, "description": "List of tool IDs to enable"},
+            },
+            "required": ["name", "type", "provider", "model"],
+        },
+        "handler": "app.tools.handlers.spawn_agent",
+    },
+    "agent_create_from": {
+        "name": "clone_agent",
+        "description": "Create a new agent by cloning an existing agent's configuration",
+        "category": "agents",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "source_agent_id": {"type": "string", "description": "UUID of the agent to clone"},
+                "new_name": {"type": "string", "description": "Name for the new agent"},
+                "override_system_prompt": {"type": "string", "description": "Override the cloned system prompt (optional)"},
+                "override_tools": {"type": "array", "items": {"type": "string"}, "description": "Override the cloned tool list (optional)"},
+            },
+            "required": ["source_agent_id", "new_name"],
+        },
+        "handler": "app.tools.handlers.clone_agent",
+    },
+    "camera_analyze": {
+        "name": "analyze_camera",
+        "description": "Take a screenshot or short recording (3-5 seconds) from a camera and analyze what's happening using vision AI. Returns an AI-generated description of what the camera sees.",
+        "category": "cameras",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "camera_id": {"type": "string", "description": "Camera UUID"},
+                "mode": {"type": "string", "enum": ["snapshot", "clip"], "description": "Capture a single frame (snapshot) or a short clip", "default": "snapshot"},
+                "duration": {"type": "integer", "minimum": 3, "maximum": 5, "description": "Clip duration in seconds (only for clip mode)", "default": 3},
+            },
+            "required": ["camera_id"],
+        },
+        "handler": "app.tools.handlers.analyze_camera",
+    },
+    "custom_api": {
+        "name": "custom_api_call",
+        "description": "Call a user-defined HTTP endpoint",
+        "category": "external",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to call"},
+                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "default": "GET"},
+                "body": {"type": "string", "description": "Request body (JSON string)"},
+            },
+            "required": ["url"],
+        },
+        "handler": "app.tools.handlers.custom_api_call",
+    },
+}
+
+
+def get_openai_function_schema(tool_id: str) -> dict:
+    """Convert a tool registry entry to OpenAI function calling schema"""
+    tool = TOOLS_REGISTRY[tool_id]
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["parameters"],
+        },
+    }
+
+
+def get_tools_for_agent(tool_ids: list[str]) -> list[dict]:
+    """Get OpenAI function schemas for a list of tool IDs"""
+    return [get_openai_function_schema(tid) for tid in tool_ids if tid in TOOLS_REGISTRY]
+
+
+def get_tools_grouped() -> dict:
+    """Get all tools grouped by category"""
+    grouped = {}
+    for tool_id, tool in TOOLS_REGISTRY.items():
+        cat = tool["category"]
+        if cat not in grouped:
+            grouped[cat] = []
+        grouped[cat].append({
+            "id": tool_id,
+            "name": tool["name"],
+            "description": tool["description"],
+            "category": cat,
+            "parameters": tool["parameters"],
+        })
+    return grouped

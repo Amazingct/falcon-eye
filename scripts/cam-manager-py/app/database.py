@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.models.camera import Base
 from app.models.recording import Recording  # Import to register model
 from app.models.chat import ChatSession, ChatMessage  # Import to register models
+from app.models.agent import Agent, AgentChatMessage, CronJob  # Import to register models
 
 settings = get_settings()
 
