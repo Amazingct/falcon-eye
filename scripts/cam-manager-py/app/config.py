@@ -1,7 +1,10 @@
 """Falcon-Eye Camera Manager Configuration"""
 from pydantic_settings import BaseSettings
 from functools import lru_cache
-import re
+import logging
+import time
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -49,12 +52,6 @@ class Settings(BaseSettings):
     k8s_api_server: str | None = None
     k8s_token: str | None = None
     
-    # Node IPs
-    node_ip_ace: str = "192.168.1.142"
-    node_ip_falcon: str = "192.168.1.176"
-    node_ip_k3s1: str = "192.168.1.207"
-    node_ip_k3s2: str = "192.168.1.138"
-    
     # NodePort range
     stream_port_start: int = 30900
     stream_port_end: int = 30999
@@ -66,21 +63,69 @@ class Settings(BaseSettings):
     default_recorder_node: str = ""  # Default node for recorder pods (empty = auto)
     default_stream_quality: int = 70
     
-    # Jetson nodes (require tolerations)
-    jetson_nodes: list[str] = ["ace", "falcon"]
+    # Jetson/special nodes that need tolerations (comma-separated via env)
+    jetson_nodes: list[str] = []
+    
+    # --- Auto-discovered node IP cache ---
+    _node_ip_cache: dict[str, str] = {}
+    _node_ip_cache_time: float = 0
+    _NODE_IP_CACHE_TTL: float = 300  # Refresh every 5 minutes
+    
+    def _refresh_node_ips(self) -> None:
+        """Auto-discover node IPs from Kubernetes API"""
+        now = time.time()
+        if self._node_ip_cache and (now - self._node_ip_cache_time) < self._NODE_IP_CACHE_TTL:
+            return  # Cache still valid
+        
+        try:
+            from kubernetes import client, config
+            try:
+                config.load_incluster_config()
+            except config.ConfigException:
+                config.load_kube_config()
+            
+            v1 = client.CoreV1Api()
+            nodes = v1.list_node()
+            new_cache = {}
+            for node in nodes.items:
+                name = node.metadata.name
+                for addr in node.status.addresses:
+                    if addr.type == "InternalIP":
+                        new_cache[name] = addr.address
+                        break
+            
+            if new_cache:
+                self._node_ip_cache = new_cache
+                self._node_ip_cache_time = now
+                logger.info(f"Auto-discovered node IPs: {new_cache}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-discover node IPs: {e}")
+            # Keep stale cache if available
     
     def get_node_ip(self, node_name: str) -> str:
-        """Get IP address for a node"""
-        node_ips = {
-            "ace": self.node_ip_ace,
-            "falcon": self.node_ip_falcon,
-            "k3s-1": self.node_ip_k3s1,
-            "k3s-2": self.node_ip_k3s2,
-        }
-        return node_ips.get(node_name, self.node_ip_k3s1)
+        """Get IP address for a node (auto-discovered from K8s API)"""
+        self._refresh_node_ips()
+        
+        if node_name in self._node_ip_cache:
+            return self._node_ip_cache[node_name]
+        
+        # Fallback: return first known node IP or localhost
+        if self._node_ip_cache:
+            fallback = next(iter(self._node_ip_cache.values()))
+            logger.warning(f"Node '{node_name}' not found, falling back to {fallback}")
+            return fallback
+        
+        logger.warning(f"No node IPs discovered, returning 127.0.0.1 for '{node_name}'")
+        return "127.0.0.1"
+    
+    @property
+    def node_ips(self) -> dict[str, str]:
+        """Get all discovered node name → IP mappings"""
+        self._refresh_node_ips()
+        return dict(self._node_ip_cache)
     
     def is_jetson_node(self, node_name: str) -> bool:
-        """Check if node is a Jetson device"""
+        """Check if node requires special tolerations (Jetson, GPU, etc.)"""
         return node_name in self.jetson_nodes
     
     class Config:

@@ -198,13 +198,8 @@ async def get_current_settings():
     except ValueError:
         pass  # Invalid int conversion, use defaults
     
-    # Build node_ips dict from individual settings
-    node_ips = {
-        "ace": settings.node_ip_ace,
-        "falcon": settings.node_ip_falcon,
-        "k3s-1": settings.node_ip_k3s1,
-        "k3s-2": settings.node_ip_k3s2,
-    }
+    # Auto-discovered node IPs from K8s API
+    node_ips = settings.node_ips
     
     return SettingsResponse(
         default_resolution=default_resolution,
