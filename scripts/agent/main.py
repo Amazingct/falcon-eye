@@ -209,7 +209,7 @@ async def _loop_anthropic(
         tool_use_blocks = [b for b in data.get("content", []) if b["type"] == "tool_use"]
         text_blocks = [b for b in data.get("content", []) if b["type"] == "text"]
 
-        if tool_use_blocks and data.get("stop_reason") == "tool_use":
+        if tool_use_blocks:
             anthropic_messages.append({"role": "assistant", "content": data["content"]})
             tool_results = []
             for tu in tool_use_blocks:

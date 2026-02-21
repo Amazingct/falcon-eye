@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { MessageCircle, Send, Plus, RefreshCw, Loader2, Bot, ChevronDown } from 'lucide-react'
+import ChatMarkdown from './ChatMarkdown'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -90,7 +91,9 @@ export default function AgentChat() {
         const data = await res.json()
         setMessages(prev => [...prev, { role: 'assistant', content: data.response, source: 'dashboard', created_at: data.timestamp }])
       } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Error getting response', created_at: new Date().toISOString() }])
+        const errData = await res.json().catch(() => null)
+        const detail = errData?.detail || 'Error getting response'
+        setMessages(prev => [...prev, { role: 'assistant', content: detail, created_at: new Date().toISOString() }])
       }
     } catch (e) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}`, created_at: new Date().toISOString() }])
@@ -182,15 +185,21 @@ export default function AgentChat() {
                     {sourceBadge(msg.source)}
                     {msg.source_user && <span className="text-[10px] text-gray-400">@{msg.source_user}</span>}
                   </div>
-                  <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                  <ChatMarkdown content={msg.content} isUser={msg.role === 'user'} />
                 </div>
               </div>
             ))
           )}
           {sendingMsg && (
             <div className="flex justify-start">
-              <div className="bg-gray-700 rounded-lg px-3 py-2">
-                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+              <div className="bg-gray-700 rounded-lg px-4 py-3 flex items-center space-x-3">
+                <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+                <span className="text-sm text-gray-300">Thinking...</span>
+                <span className="flex space-x-1">
+                  <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </span>
               </div>
             </div>
           )}

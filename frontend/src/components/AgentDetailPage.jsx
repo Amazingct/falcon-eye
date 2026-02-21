@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { ArrowLeft, Bot, Send, Plus, Loader2, MessageCircle, Clock, RefreshCw, Hash } from 'lucide-react'
+import ChatMarkdown from './ChatMarkdown'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -15,11 +16,14 @@ function formatTime(iso) {
   const d = new Date(iso)
   const now = new Date()
   const diffMs = now - d
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return 'just now'
+  const diffSec = Math.floor(diffMs / 1000)
+  if (diffSec < 60) return 'just now'
+  const diffMin = Math.floor(diffSec / 60)
   if (diffMin < 60) return `${diffMin}m ago`
   const diffHr = Math.floor(diffMin / 60)
   if (diffHr < 24) return `${diffHr}h ago`
+  const diffDays = Math.floor(diffHr / 24)
+  if (diffDays < 7) return `${diffDays}d ago`
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
@@ -37,9 +41,15 @@ export default function AgentDetailPage({ agentId, onBack }) {
   const [loading, setLoading] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [sending, setSending] = useState(false)
+  const [, setTick] = useState(0)
   const messagesEndRef = useRef(null)
   const pollRef = useRef(null)
   const messageCountRef = useRef(0)
+
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 30000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     fetch(`${API_URL}/agents/${agentId}`)
@@ -325,7 +335,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
                           {msg.source_user && <span className="text-[10px] text-gray-400">@{msg.source_user}</span>}
                           <span className="text-[10px] text-gray-500">{formatTimestamp(msg.created_at)}</span>
                         </div>
-                        <p className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</p>
+                        <ChatMarkdown content={msg.content} isUser={msg.role === 'user'} />
                         {msg.prompt_tokens && (
                           <p className="text-[10px] text-gray-500 mt-1">
                             {msg.prompt_tokens + (msg.completion_tokens || 0)} tokens
