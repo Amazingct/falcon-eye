@@ -123,8 +123,8 @@ async def delete_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if agent.type == "built-in":
-        raise HTTPException(status_code=400, detail="Cannot delete built-in agent")
+    if agent.slug == "main":
+        raise HTTPException(status_code=400, detail="Cannot delete the main agent")
 
     # Delete K8s resources if running
     if agent.deployment_name:
@@ -145,11 +145,6 @@ async def start_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-
-    if agent.type == "built-in":
-        agent.status = "running"
-        await db.commit()
-        return {"message": "Built-in agent is always running", "id": str(agent_id)}
 
     if agent.status == "running":
         return {"message": "Agent already running", "id": str(agent_id)}
@@ -179,8 +174,8 @@ async def stop_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    if agent.type == "built-in":
-        return {"message": "Cannot stop built-in agent", "id": str(agent_id)}
+    if agent.slug == "main":
+        raise HTTPException(status_code=400, detail="Cannot stop the main agent")
 
     if agent.deployment_name:
         try:
@@ -196,7 +191,7 @@ async def stop_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 async def ensure_main_agent(db: AsyncSession):
-    """Auto-create or update the main built-in agent"""
+    """Auto-create the main agent as a pod and ensure it's deployed"""
     MAIN_TOOLS = list(TOOLS_REGISTRY.keys())
     MAIN_PROMPT = (
         "You are Falcon-Eye's AI assistant — a helpful, friendly operator for a distributed camera surveillance system running on Kubernetes.\n\n"
@@ -215,30 +210,48 @@ async def ensure_main_agent(db: AsyncSession):
     )
 
     result = await db.execute(select(Agent).where(Agent.slug == "main"))
-    existing = result.scalar_one_or_none()
+    agent = result.scalar_one_or_none()
 
-    if existing:
+    if agent:
+        # Update tools/prompt if changed
         changed = False
-        if set(existing.tools or []) != set(MAIN_TOOLS):
-            existing.tools = MAIN_TOOLS
+        if set(agent.tools or []) != set(MAIN_TOOLS):
+            agent.tools = MAIN_TOOLS
             changed = True
-        if existing.system_prompt != MAIN_PROMPT:
-            existing.system_prompt = MAIN_PROMPT
+        if agent.system_prompt != MAIN_PROMPT:
+            agent.system_prompt = MAIN_PROMPT
+            changed = True
+        # Migrate built-in -> pod
+        if agent.type == "built-in":
+            agent.type = "pod"
             changed = True
         if changed:
             await db.commit()
-        return
-
-    if not existing:
-        main_agent = Agent(
+            await db.refresh(agent)
+    else:
+        agent = Agent(
             name="Main Assistant",
             slug="main",
-            type="built-in",
-            status="running",
+            type="pod",
+            status="stopped",
             provider="anthropic",
             model="claude-sonnet-4-20250514",
             system_prompt=MAIN_PROMPT,
             tools=MAIN_TOOLS,
         )
-        db.add(main_agent)
+        db.add(agent)
         await db.commit()
+        await db.refresh(agent)
+
+    # Auto-deploy if not running
+    if agent.status != "running":
+        try:
+            k8s_result = await k8s.create_agent_deployment(agent)
+            agent.deployment_name = k8s_result["deployment_name"]
+            agent.service_name = k8s_result["service_name"]
+            agent.status = "running"
+            await db.commit()
+        except Exception as e:
+            print(f"Warning: Failed to auto-deploy main agent: {e}")
+            agent.status = "error"
+            await db.commit()

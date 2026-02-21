@@ -139,7 +139,7 @@ export default function AgentsPage({ onSelectAgent }) {
                   <div className="flex items-center space-x-2">
                     <h3 className="font-semibold truncate group-hover:text-blue-400 transition-colors">{agent.name}</h3>
                     {agent.slug === 'main' && (
-                      <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">Built-in</span>
+                      <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">Main</span>
                     )}
                     {statusBadge(agent.status)}
                   </div>
@@ -152,11 +152,11 @@ export default function AgentsPage({ onSelectAgent }) {
               </div>
               <div className="flex items-center space-x-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                 {agent.status === 'running' ? (
-                  <button onClick={() => stopAgent(agent.id)} className="p-2 rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 transition" title="Stop" disabled={agent.type === 'built-in'}>
+                  <button onClick={() => stopAgent(agent.id)} className="p-2 rounded bg-red-500/20 hover:bg-red-500/30 text-red-400 transition" title="Stop" disabled={agent.slug === 'main'}>
                     <Square className="h-4 w-4" />
                   </button>
                 ) : (
-                  <button onClick={() => startAgent(agent.id)} className="p-2 rounded bg-green-500/20 hover:bg-green-500/30 text-green-400 transition" title="Start" disabled={agent.type === 'built-in'}>
+                  <button onClick={() => startAgent(agent.id)} className="p-2 rounded bg-green-500/20 hover:bg-green-500/30 text-green-400 transition" title="Start">
                     <Play className="h-4 w-4" />
                   </button>
                 )}

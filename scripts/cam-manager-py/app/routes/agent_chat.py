@@ -112,7 +112,7 @@ async def send_message(
         llm_messages.append({"role": "system", "content": system_prompt})
 
         # For pod agents, load history; for main agent, stateless
-        if agent.type != "built-in":
+        if agent.slug != "main":
             history_result = await db.execute(
                 select(AgentChatMessage)
                 .where(AgentChatMessage.agent_id == agent_id, AgentChatMessage.session_id == session_id)

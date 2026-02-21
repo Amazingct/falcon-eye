@@ -854,14 +854,18 @@ function AddCameraModal({ nodes, onClose, onAdd }) {
             <select
               value={form.node}
               onChange={e => setForm({ ...form, node: e.target.value })}
-              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-              required
+              className={`w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 ${form.type === 'usb' ? 'opacity-60 cursor-not-allowed' : ''}`}
+              required={form.type === 'usb'}
+              disabled={form.type === 'usb'}
             >
+              {form.type !== 'usb' && <option value="">Auto (optional)</option>}
               {nodes.map(node => (
                 <option key={node.name} value={node.name}>{node.name} ({node.ip})</option>
               ))}
             </select>
-            <p className="text-xs text-gray-400 mt-1">Select the node where the camera is connected</p>
+            <p className="text-xs text-gray-400 mt-1">
+              {form.type === 'usb' ? 'Auto-detected from scan (cannot be changed for USB cameras)' : 'Select the node where the camera is connected (optional for network cameras)'}
+            </p>
           </div>
 
           <div>
@@ -1929,6 +1933,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [chatStatus, setChatStatus] = useState(null)
+  const [mainAgentId, setMainAgentId] = useState(null)
   const [isResizing, setIsResizing] = useState(false)
   const [showSessions, setShowSessions] = useState(false)
   const [editingName, setEditingName] = useState(null)
@@ -1968,17 +1973,26 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
     }
   }, [isResizing])
 
-  // Check chat health on mount
+  // Find main agent and check chat readiness
   useEffect(() => {
-    const checkHealth = async () => {
+    const findMainAgent = async () => {
       try {
-        const res = await fetch(`${API_URL}/chat/health`)
-        if (res.ok) setChatStatus(await res.json())
+        const res = await fetch(`${API_URL}/agents/`)
+        if (res.ok) {
+          const data = await res.json()
+          const main = (data.agents || []).find(a => a.slug === 'main')
+          if (main) {
+            setMainAgentId(main.id)
+            setChatStatus({ status: 'ok', configured: true })
+          } else {
+            setChatStatus({ status: 'error', configured: false })
+          }
+        }
       } catch (err) {
         setChatStatus({ status: 'error', configured: false })
       }
     }
-    checkHealth()
+    findMainAgent()
   }, [])
 
   useEffect(() => {
@@ -2049,23 +2063,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   }
 
   const sendMessage = async () => {
-    if (!input.trim() || isLoading) return
-    
-    // Create session if none
-    let session = currentSession
-    if (!session) {
-      try {
-        const res = await fetch(`${API_URL}/chat/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-        if (res.ok) {
-          session = await res.json()
-          setSessions(prev => [session, ...prev])
-          setCurrentSession(session)
-        }
-      } catch (err) {
-        console.error('Failed to create session:', err)
-        return
-      }
-    }
+    if (!input.trim() || isLoading || !mainAgentId) return
 
     const userMessage = { role: 'user', content: input.trim() }
     setMessages(prev => [...prev, userMessage])
@@ -2073,44 +2071,15 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
     setIsLoading(true)
 
     try {
-      const res = await fetch(`${API_URL}/chat/sessions/${session.id}/chat`, {
+      const res = await fetch(`${API_URL}/chat/${mainAgentId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: userMessage.content, stream: true }),
+        body: JSON.stringify({ message: userMessage.content, source: 'dashboard' }),
       })
       if (!res.ok) throw new Error('Chat request failed')
 
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let assistantContent = ''
-      setMessages(prev => [...prev, { role: 'assistant', content: '', thinking: false }])
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        const chunk = decoder.decode(value)
-        const lines = chunk.split('\n')
-        let currentEvent = 'message'
-        for (const line of lines) {
-          if (line.startsWith('event: ')) { currentEvent = line.slice(7).trim(); continue }
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (currentEvent === 'thinking') {
-                setMessages(prev => { const u = [...prev]; u[u.length-1] = { role: 'assistant', content: assistantContent, thinking: true }; return u })
-              } else if (currentEvent === 'message' && data.content) {
-                const text = typeof data.content === 'string' ? data.content : ''
-                if (text) {
-                  assistantContent += text
-                  setMessages(prev => { const u = [...prev]; u[u.length-1] = { role: 'assistant', content: assistantContent, thinking: false }; return u })
-                }
-              }
-            } catch (e) {}
-          }
-        }
-      }
-      // Refresh sessions to get updated name
-      fetchSessions()
+      const data = await res.json()
+      setMessages(prev => [...prev, { role: 'assistant', content: data.response }])
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
     } finally {
