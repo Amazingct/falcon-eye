@@ -332,7 +332,9 @@ async def spawn_agent(name: str, system_prompt: str = None, tools: list = None,
             "channel_config": {} if task else parent_config.get("channel_config", {}),
             "system_prompt": system_prompt or (
                 f"You are {name}, a specialized Falcon-Eye agent. "
-                f"Complete the assigned task thoroughly and concisely."
+                f"Complete the assigned task thoroughly but efficiently. "
+                f"Limit tool calls — gather essential information in a few "
+                f"focused steps, then produce your final answer."
             ),
             "tools": agent_tools,
         }

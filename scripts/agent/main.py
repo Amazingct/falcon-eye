@@ -43,7 +43,7 @@ AGENT_TASK = os.getenv("AGENT_TASK", "")
 CALLER_AGENT_ID = os.getenv("CALLER_AGENT_ID", "")
 CALLER_SESSION_ID = os.getenv("CALLER_SESSION_ID", "")
 
-MAX_RECURSION = 25
+MAX_RECURSION = int(os.getenv("MAX_RECURSION", "50"))
 
 
 # ─── Request / Response models ──────────────────────────────
@@ -126,26 +126,41 @@ async def run_chat(
         else:
             lc_messages.append(HumanMessage(content=content))
 
+    recursion_limit = agent_config.get("recursion_limit", MAX_RECURSION)
     agent = create_react_agent(model=llm, tools=tools)
 
-    result = await agent.ainvoke(
-        {"messages": lc_messages},
-        config={"recursion_limit": MAX_RECURSION},
-    )
-
-    # Extract the final AI response and aggregate token usage
+    # Stream so we can capture partial results if the recursion limit is hit
     response_text = ""
     total_input = 0
     total_output = 0
+    hit_limit = False
 
-    for msg in result["messages"]:
-        if isinstance(msg, AIMessage):
-            if msg.content and not msg.tool_calls:
-                response_text = msg.content
-            usage = getattr(msg, "usage_metadata", None)
-            if usage and isinstance(usage, dict):
-                total_input += usage.get("input_tokens", 0)
-                total_output += usage.get("output_tokens", 0)
+    try:
+        async for step in agent.astream(
+            {"messages": lc_messages},
+            config={"recursion_limit": recursion_limit},
+            stream_mode="updates",
+        ):
+            for _node_name, node_output in step.items():
+                for msg in node_output.get("messages", []):
+                    if isinstance(msg, AIMessage):
+                        if msg.content and not msg.tool_calls:
+                            response_text = msg.content
+                        usage = getattr(msg, "usage_metadata", None)
+                        if usage and isinstance(usage, dict):
+                            total_input += usage.get("input_tokens", 0)
+                            total_output += usage.get("output_tokens", 0)
+    except Exception as e:
+        if "recursion" in str(e).lower() or "GraphRecursionError" in type(e).__name__:
+            hit_limit = True
+            logger.warning("Hit recursion limit (%d). Returning last captured response.", recursion_limit)
+            if not response_text:
+                response_text = (
+                    "(The task exceeded the maximum processing steps. "
+                    "Partial progress was made but no final answer was produced.)"
+                )
+        else:
+            raise
 
     return (
         response_text,
@@ -548,6 +563,16 @@ async def run_task_mode():
             "Do not describe what you would do — actually call the tool.\n\n"
             + "\n".join(tool_lines)
         )
+
+    # Task-mode agents should be efficient to avoid hitting the recursion limit
+    system_prompt += (
+        "\n\n## Task Execution Guidelines\n"
+        "You are running as a single-task agent. Be efficient:\n"
+        "- Limit web searches to 3-5 queries. Do NOT repeat similar searches.\n"
+        "- Once you have sufficient information, stop searching and produce your answer.\n"
+        "- If you need to write a file, gather ALL information first, then write ONCE.\n"
+        "- Produce a complete, well-structured final answer when done.\n"
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},
