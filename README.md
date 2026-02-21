@@ -15,7 +15,7 @@ Stream USB, RTSP, ONVIF, and HTTP cameras through a unified web interface. Deplo
 - **Recording**: Start/stop recording per camera, download MP4 files from any node
 - **Auto-Discovery**: Detects cluster nodes and available cameras (USB + network scan)
 - **Node Selection**: Pin cameras to specific nodes (required for USB, optional for network)
-- **AI Chatbot**: Claude-powered assistant for camera management (optional)
+- **AI Agent System**: Multi-agent platform powered by LangGraph with tool calling, inter-agent delegation, and channel adapters (Dashboard, Telegram, Webhooks)
 - **Self-Healing**: Automatic cleanup of orphaned pods and stale resources
 - **ARM64 Support**: Works on Jetson, Raspberry Pi, and x86 clusters
 - **Generic Design**: Works across any Kubernetes distribution (k3s, k8s, MicroK8s, etc.)
@@ -34,9 +34,11 @@ curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh
 
 ### What Gets Installed
 
-- **PostgreSQL**: Database for camera configurations and recordings
+- **PostgreSQL**: Database for camera configurations, recordings, and agent state
 - **Falcon-Eye API**: Backend service (ClusterIP — internal only)
 - **Falcon-Eye Dashboard**: Web UI on port 30900 (the only external service)
+- **Agent Pods**: LangGraph-powered AI agents with tool calling (one pod per agent)
+- **Shared Filesystem**: PVC for inter-agent file exchange (snapshots, reports, media)
 - **File-Server DaemonSet**: Serves recordings from every node
 - **Cleanup CronJob**: Removes orphaned resources
 - **RBAC**: Service accounts and permissions for K8s integration
@@ -73,35 +75,39 @@ All camera management, recording, and configuration happens through the web UI.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  Kubernetes Cluster                          │
-│                                                              │
-│  ┌──────────────────────────────────────────┐               │
-│  │  Dashboard (NodePort 30900)               │               │
-│  │  React + Tailwind CSS + nginx             │               │
-│  │  Only externally accessible service       │               │
-│  └──────────────────┬───────────────────────┘               │
-│                     │ /api/* proxy                           │
-│                     ▼                                        │
-│  ┌──────────────────────────────────────────┐               │
-│  │  Falcon-Eye API (ClusterIP)               │               │
-│  │  Python FastAPI — camera CRUD, K8s mgmt,  │               │
-│  │  stream proxy, recording management       │               │
-│  └─────┬─────────────┬──────────────┬───────┘               │
-│        │             │              │                        │
-│        ▼             ▼              ▼                        │
-│  ┌───────────┐ ┌───────────┐ ┌───────────┐                 │
-│  │ Camera    │ │ Camera    │ │ Recorder  │                  │
-│  │ Pod (USB) │ │ Pod (RTSP)│ │ Pod       │                  │
-│  │ ClusterIP │ │ ClusterIP │ │ ClusterIP │                  │
-│  └───────────┘ └───────────┘ └─────┬─────┘                 │
-│                                     │                        │
-│                                     ▼                        │
-│  ┌──────────────────────────────────────────┐               │
-│  │  File-Server DaemonSet (every node)       │               │
-│  │  nginx:alpine — serves recordings         │               │
-│  └──────────────────────────────────────────┘               │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                        Kubernetes Cluster                             │
+│                                                                      │
+│  ┌──────────────────────────────────────────┐                       │
+│  │  Dashboard (NodePort 30900)               │                       │
+│  │  React + Tailwind + nginx                 │                       │
+│  │  Only externally accessible service       │                       │
+│  └──────────────────┬───────────────────────┘                       │
+│                     │ /api/* proxy                                    │
+│                     ▼                                                 │
+│  ┌──────────────────────────────────────────┐                       │
+│  │  Falcon-Eye API (ClusterIP)               │                       │
+│  │  FastAPI — cameras, agents, tools, files  │                       │
+│  └──┬──────────┬──────────┬─────────┬───────┘                       │
+│     │          │          │         │                                 │
+│     ▼          ▼          ▼         ▼                                 │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────────────────────┐       │
+│  │Camera  │ │Camera  │ │Recorder│ │  Agent Pods (LangGraph) │       │
+│  │Pod USB │ │Pod RTSP│ │Pod     │ │  ┌─────────┐ ┌────────┐│       │
+│  │        │ │        │ │        │ │  │Main     │ │Telegram││       │
+│  │        │ │        │ │        │ │  │Agent    │ │Agent   ││       │
+│  └────────┘ └────────┘ └───┬────┘ │  └─────────┘ └────────┘│       │
+│                             │      │  ┌─────────┐           │       │
+│                             │      │  │Spawned  │ (ephemeral│       │
+│                             │      │  │Agent    │  on-demand)│       │
+│                             │      │  └─────────┘           │       │
+│                             │      └────────────────────────┘       │
+│                             ▼                                        │
+│  ┌──────────────────────────────────────────┐                       │
+│  │  Shared Filesystem (PVC) + File-Server    │                       │
+│  │  Recordings, snapshots, agent files       │                       │
+│  └──────────────────────────────────────────┘                       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## API Reference
@@ -115,21 +121,29 @@ kubectl port-forward svc/falcon-eye-api 8000:8000 -n falcon-eye
 ### Key Endpoints
 
 ```
-GET  /api/cameras/                  # List all cameras
-POST /api/cameras/                  # Add camera
-GET  /api/cameras/:id               # Get camera details
-GET  /api/cameras/:id/stream        # Proxy camera MJPEG stream
-DELETE /api/cameras/:id             # Delete camera
-POST /api/cameras/:id/start         # Start camera stream
-POST /api/cameras/:id/stop          # Stop camera stream
+# Cameras
+GET  /api/cameras/                     # List all cameras
+POST /api/cameras/                     # Add camera
+GET  /api/cameras/:id/stream           # Proxy MJPEG stream
+POST /api/cameras/:id/start            # Start camera
 POST /api/cameras/:id/recording/start  # Start recording
-POST /api/cameras/:id/recording/stop   # Stop recording
-GET  /api/recordings/               # List recordings
-GET  /api/recordings/:id/download   # Download recording
-GET  /api/nodes/                    # List cluster nodes
-GET  /api/nodes/scan/cameras        # Scan for cameras
-GET  /api/settings/                 # Get settings
-PATCH /api/settings/                # Update settings
+
+# Agents
+GET  /api/agents/                      # List agents
+POST /api/agents/                      # Create agent
+POST /api/agents/:id/start             # Deploy agent pod
+POST /api/chat/:id/send                # Send message to agent
+
+# Tools & Files
+GET  /api/tools/                       # List available tools
+POST /api/tools/execute                # Execute a tool
+GET  /api/files/                       # List shared files
+POST /api/files/write                  # Write to shared filesystem
+
+# System
+GET  /api/nodes/                       # List cluster nodes
+GET  /api/nodes/scan/cameras           # Scan for cameras
+GET  /api/settings/                    # Get settings
 ```
 
 See [docs/API-REFERENCE.md](docs/API-REFERENCE.md) for full documentation.
@@ -185,6 +199,7 @@ kubectl port-forward svc/falcon-eye-api 8000:8000 -n falcon-eye
 | [USER-MANUAL.md](docs/USER-MANUAL.md) | Dashboard usage guide for end users |
 | [API-REFERENCE.md](docs/API-REFERENCE.md) | Complete REST API documentation |
 | [CODE-REFERENCE.md](docs/CODE-REFERENCE.md) | Source code structure and internals |
+| [TOOLS.md](docs/TOOLS.md) | Complete reference for all 22 agent tools |
 | [CONFIGURATION.md](docs/CONFIGURATION.md) | Environment variables and configuration |
 
 ## Project Structure
@@ -199,8 +214,16 @@ falcon-eye/
 └── scripts/
     ├── cam-manager-py/     # FastAPI backend
     │   ├── app/
+    │   │   ├── routes/     # API endpoints (cameras, agents, chat, tools, files)
+    │   │   ├── tools/      # Tool registry + handler implementations
+    │   │   ├── models/     # ORM models (Camera, Recording, Agent, ChatMessage)
+    │   │   └── services/   # K8s orchestration, converters
     │   ├── Dockerfile
     │   └── requirements.txt
+    ├── agent/              # LangGraph agent pod image
+    │   ├── main.py         # Agent entry point (chat, Telegram, webhooks)
+    │   ├── tool_executor.py # Dynamic tool builder from API schemas
+    │   └── Dockerfile
     ├── camera-usb/         # USB camera relay image
     ├── camera-rtsp/        # RTSP/ONVIF/HTTP relay image
     └── recorder/           # FFmpeg recorder image

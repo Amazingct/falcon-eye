@@ -19,6 +19,7 @@ class CronJobCreate(BaseModel):
     agent_id: str
     cron_expr: str = Field(..., min_length=1)
     timezone: str = Field(default="UTC")
+    session_id: Optional[str] = None
     prompt: str = Field(..., min_length=1)
     timeout_seconds: int = Field(default=120, ge=10, le=3600)
     enabled: bool = True
@@ -60,6 +61,7 @@ async def create_cron_job(data: CronJobCreate, db: AsyncSession = Depends(get_db
         agent_id=data.agent_id,
         cron_expr=data.cron_expr,
         timezone=data.timezone,
+        session_id=data.session_id,
         prompt=data.prompt,
         timeout_seconds=data.timeout_seconds,
         enabled=data.enabled,

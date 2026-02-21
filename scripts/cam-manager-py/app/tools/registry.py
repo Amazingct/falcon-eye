@@ -195,6 +195,46 @@ TOOLS_REGISTRY = {
         },
         "handler": "app.tools.handlers.clone_agent",
     },
+    "cron_create": {
+        "name": "create_cron_job",
+        "description": "Create a scheduled cron job that sends a prompt to you on a recurring schedule. Results are delivered to your current chat session. Use standard cron expressions (e.g., '0 9 * * *' for every day at 9 AM, '*/30 * * * *' for every 30 minutes).",
+        "category": "scheduling",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Display name for the cron job (e.g., 'Morning camera check')"},
+                "cron_expr": {"type": "string", "description": "Cron expression (e.g., '0 9 * * *' for daily at 9 AM UTC)"},
+                "prompt": {"type": "string", "description": "The prompt/instruction to execute on each run"},
+                "timezone": {"type": "string", "description": "Timezone (default: UTC)", "default": "UTC"},
+                "timeout_seconds": {"type": "integer", "description": "Max execution time in seconds (default: 120)", "default": 120},
+            },
+            "required": ["name", "cron_expr", "prompt"],
+        },
+        "handler": "app.tools.handlers.create_cron_job",
+    },
+    "cron_list": {
+        "name": "list_cron_jobs",
+        "description": "List all your scheduled cron jobs with their schedule, status, and last run result.",
+        "category": "scheduling",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": "app.tools.handlers.list_cron_jobs",
+    },
+    "cron_delete": {
+        "name": "delete_cron_job",
+        "description": "Delete a scheduled cron job by ID.",
+        "category": "scheduling",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cron_id": {"type": "string", "description": "UUID of the cron job to delete"},
+            },
+            "required": ["cron_id"],
+        },
+        "handler": "app.tools.handlers.delete_cron_job",
+    },
     "camera_analyze": {
         "name": "analyze_camera",
         "description": "Take a screenshot or short recording (3-5 seconds) from a camera and analyze what's happening using vision AI. Returns an AI-generated description of what the camera sees.",

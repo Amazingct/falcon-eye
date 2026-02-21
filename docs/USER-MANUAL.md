@@ -187,16 +187,47 @@ Click the red pulsing **Stop** button (■) on the camera card. The recording is
 
 ---
 
-## AI Chatbot
+## AI Agents
 
-If an Anthropic API key has been configured, you'll see a blue chat button (💬) in the bottom-right corner.
+Falcon-Eye includes a full multi-agent AI system. Agents are LLM-powered assistants that can manage cameras, take snapshots, search the web, read/write files, and even spawn other agents to handle subtasks.
 
-1. Click the chat button to open the assistant
-2. Type questions like:
-   - "How many cameras are online?"
-   - "Show me the cameras on node k3s-1"
-   - "What's the status of the front door camera?"
-3. The assistant can read camera data and help with troubleshooting
+### Accessing Agents
+
+There are two ways to interact with agents:
+
+1. **Dashboard Chat**: Click the chat button in the bottom-right corner of the dashboard. This connects to your main agent.
+2. **Agents Page**: Click "Agents" in the navigation bar to see all agents, create new ones, and manage their settings.
+
+### What Agents Can Do
+
+Agents have access to **tools** that let them take actions:
+
+| Tool | What It Does |
+|------|-------------|
+| List Cameras | See all cameras and their status |
+| Camera Snapshot | Take a photo from any camera |
+| Analyze Camera | Use vision AI to describe what a camera sees |
+| Start/Stop Camera | Control camera streaming |
+| Start/Stop Recording | Control recording |
+| Web Search | Search the internet for information |
+| Read/Write Files | Access the shared filesystem |
+| Send Media | Send photos or files to your chat |
+| Send Alert | Log and push alerts to Telegram |
+| Spawn Agent | Create a temporary agent for a subtask |
+| Delegate Task | Send a task to another running agent |
+
+### Talking to Your Agent
+
+Type naturally — the agent understands plain English:
+
+- "How many cameras are online?"
+- "Take a snapshot of the office camera"
+- "What does the front door camera see right now?"
+- "Search the web for how to configure ONVIF cameras"
+- "Start recording on all cameras"
+- "Create a new agent called 'researcher' and have it find information about security camera best practices"
+
+Responses are rendered as **markdown** with formatting, code blocks, and lists.
 
 ### Chat Features
 
@@ -205,16 +236,45 @@ If an Anthropic API key has been configured, you'll see a blue chat button (💬
 - **Dock/Undock**: Toggle between a side panel and floating window
 - **Resize**: Drag the left edge of the docked panel to resize
 
-### Enabling the Chatbot
+### Managing Agents
 
-If the chatbot shows "Set ANTHROPIC_API_KEY to enable chat":
+On the **Agents** page:
 
-1. Click the **Settings** (gear) icon in the header
-2. Under **Chatbot Settings**, enter your Anthropic API key
-3. Click **Save**
-4. The page will reload — the chatbot should now be active
+1. **Create**: Click "Add Agent" to create a new agent with a custom name, system prompt, and tool set
+2. **Configure**: Set the LLM provider (OpenAI or Anthropic), model, temperature, and which tools the agent can use
+3. **Start/Stop**: Deploy or remove the agent's pod
+4. **Telegram**: Configure a Telegram bot token and chat ID to connect an agent to Telegram
+5. **Chat**: Click "Chat" on any agent to open a conversation
 
-Get an API key at: [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+### Multi-Agent Collaboration
+
+Agents can work together:
+
+- **Spawn Agent**: An agent can create a temporary helper agent with a specific task. The helper runs in the background, and when it finishes, the result is automatically delivered back to the original agent's conversation.
+- **Delegate Task**: An agent can send a task to another already-running agent and receive the result asynchronously.
+
+This happens automatically when the agent decides it needs help — you don't need to manage it manually.
+
+### Telegram Integration
+
+To connect an agent to Telegram:
+
+1. Create a Telegram bot via [@BotFather](https://t.me/BotFather)
+2. On the Agents page, edit your agent
+3. Set **Channel Type** to "telegram"
+4. Enter the **Bot Token** and your **Chat ID**
+5. Start the agent
+
+The agent will now respond to messages in your Telegram chat with full tool access.
+
+### Setting Up AI
+
+To use agents, you need an API key from either:
+
+- **Anthropic**: [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
+- **OpenAI**: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+Configure the key in the agent's settings on the Agents page, or set it as an environment variable (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`).
 
 ---
 

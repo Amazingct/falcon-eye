@@ -59,6 +59,43 @@ Browser ──▶ Dashboard (NodePort 30900)
 
 The API proxies camera streams internally, so camera pods never need direct external access.
 
+## High-Level Overview (with Agent System)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                          Kubernetes Cluster                                │
+│  Namespace: falcon-eye                                                    │
+│                                                                           │
+│  ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐        │
+│  │  Dashboard    │    │   API Server     │    │   PostgreSQL     │        │
+│  │  (React SPA)  │───▶│   (FastAPI)      │───▶│   (postgres:15)  │        │
+│  │  nginx:80     │    │   :8000          │    │   :5432          │        │
+│  │  NodePort     │    │   ClusterIP      │    │                  │        │
+│  │  30900        │    │   (internal)     │    │                  │        │
+│  └──────────────┘    └───────┬──────────┘    └──────────────────┘        │
+│         │                    │                                             │
+│  streams proxied        ┌────┼────────────┬──────────────┐               │
+│  via API                │    │            │              │               │
+│         │               ▼    ▼            ▼              ▼               │
+│         │   ┌──────────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────┐ │
+│         └──▶│ Camera Pods  │ │ Recorder │ │ Cleanup  │ │ Agent Pods  │ │
+│             │ (USB/RTSP)   │ │ Pods     │ │ CronJob  │ │ (LangGraph) │ │
+│             │ ClusterIP    │ │ ClusterIP│ │          │ │ ClusterIP   │ │
+│             └──────┬───────┘ └────┬─────┘ └──────────┘ └──────┬──────┘ │
+│                    │              │                             │         │
+│                    │              │    ┌────────────────────────┘         │
+│                    │              │    │  tools executed via API           │
+│                    ▼              ▼    ▼                                   │
+│  ┌───────────────────────────────────────────────────────────┐           │
+│  │  Shared Filesystem (PVC: falcon-eye-agent-files)           │           │
+│  │  /agent-files — snapshots, reports, media, alerts          │           │
+│  ├───────────────────────────────────────────────────────────┤           │
+│  │  File-Server DaemonSet (every node)                        │           │
+│  │  nginx:alpine — serves /data/falcon-eye/recordings         │           │
+│  └───────────────────────────────────────────────────────────┘           │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Components
 
 ### 1. Dashboard (falcon-eye-dashboard)
@@ -142,6 +179,69 @@ Each camera gets a paired recorder Deployment + ClusterIP Service:
   2. Deletes stale camera deployments/services not registered in the database
   3. Deletes stale recorder deployments/services for cameras no longer in the database
 
+### 8. Agent Pods (LangGraph)
+
+Each AI agent runs as its own Kubernetes Deployment + ClusterIP Service:
+
+- **Image**: `ghcr.io/amazingct/falcon-eye-agent:latest`
+- **Technology**: Python with LangGraph `create_react_agent`, supporting Anthropic and OpenAI providers
+- **Port**: 8080 (ClusterIP only — API server proxies all communication)
+- **Endpoints**: `/chat/send` (API-proxied chat), `/process` (direct Telegram/webhook messages), `/health`
+- **Tool execution**: Agent pods do **not** execute tools directly. They call back to the API's `/api/tools/execute` endpoint, which runs the handler on the API pod. This keeps all Kubernetes and database access centralized.
+- **Shared filesystem**: Mounted at `/agent-files` via PVC (`falcon-eye-agent-files`) for inter-agent file exchange
+- **Channels**: Dashboard (via API proxy), Telegram (bot running on the agent pod), Webhooks
+
+#### Agent Types
+
+| Type | Lifecycle | Description |
+|------|-----------|-------------|
+| Persistent | Long-running | Created via dashboard or API, runs until stopped |
+| Ephemeral | Task-scoped | Spawned by another agent via `spawn_agent` tool, auto-deleted after task completion |
+
+#### Multi-Agent Communication
+
+Agents can collaborate asynchronously:
+
+- **`spawn_agent` (with task)**: Creates an ephemeral agent pod, returns immediately. The spawned agent executes in the background. When done, the result is injected as a system message into the caller's session, the caller is re-triggered to process it, and the ephemeral pod is cleaned up.
+- **`delegate_task`**: Sends a task to an already-running agent asynchronously. Returns immediately. The result is delivered the same way — as a system message to the caller's session.
+
+```
+Caller Agent                    Spawned Agent
+    │                               │
+    │── spawn_agent(task) ──────▶   │ (pod created)
+    │   returns immediately         │
+    │   continues working...        │
+    │                               │── executes task
+    │                               │── calls tools via API
+    │                               │── returns result
+    │                               │
+    │◀── system message injected ───│
+    │◀── caller re-triggered        │
+    │   processes result             │ (pod deleted)
+    ▼                               ▼
+```
+
+### 9. Tool System
+
+Tools are registered in `app/tools/registry.py` and executed by handlers in `app/tools/handlers.py`. The API serves as the central tool execution hub:
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| cameras | `list_cameras`, `camera_status`, `control_camera`, `camera_snapshot`, `analyze_camera` | Camera management and vision AI |
+| recording | `start_recording`, `stop_recording`, `list_recordings` | Recording control |
+| system | `list_nodes`, `scan_cameras`, `system_info` | Cluster operations |
+| agents | `spawn_agent`, `delegate_task`, `clone_agent` | Multi-agent orchestration |
+| filesystem | `read_file`, `write_file`, `list_files`, `delete_file`, `send_media` | Shared filesystem operations |
+| alerts | `send_alert` | Alert logging + Telegram push |
+| external | `web_search`, `custom_api_call` | External integrations |
+
+### 10. Shared Filesystem
+
+- **PVC**: `falcon-eye-agent-files` (1Gi)
+- **Mount path**: `/agent-files` on API and all agent pods
+- **Purpose**: Camera snapshots, reports, alert logs, and inter-agent file exchange
+- **API**: `/api/files/*` endpoints for read/write/upload/delete/list
+
 ## Data Flow
 
 ### Live Streaming
@@ -192,6 +292,71 @@ Dashboard proxies to API → Browser downloads file
 - For **RTSP cameras**: recorder reads directly from the camera's source RTSP URL (better quality, no double-encoding) and copies the video stream
 - **File discovery**: When downloading, the API queries file-server DaemonSet pods to locate the file. It uses the `node_name` stored on the recording as a hint, falling back to scanning all nodes.
 
+### Agent Chat (Dashboard)
+
+```
+Browser (Dashboard)
+    │
+    ├── POST /api/chat/{agent_id}/send
+    │
+    ▼
+API Server
+    │ 1. Save user message to DB
+    │ 2. Build LLM context (system prompt + history + tool schemas)
+    │ 3. Proxy to agent pod
+    │
+    ▼
+Agent Pod (LangGraph ReAct agent)
+    │ 4. LLM decides: respond or call tools
+    │ 5. If tool needed → POST /api/tools/execute → API handler → result
+    │ 6. LLM loop continues until final response
+    │
+    ▼
+API Server
+    │ 7. Save assistant message to DB
+    │ 8. Return response + media (if any)
+    │
+    ▼
+Browser (renders markdown response)
+```
+
+### Agent Chat (Telegram)
+
+```
+Telegram Cloud
+    │ Webhook or polling
+    ▼
+Agent Pod (Telegram bot)
+    │ 1. Receive message
+    │ 2. Fetch chat-config from API (tools, system prompt, credentials)
+    │ 3. Run LangGraph agent (tools call back to API)
+    │ 4. Save messages to DB via API
+    │ 5. Send response + media to Telegram
+    ▼
+Telegram Cloud → User's phone/desktop
+```
+
+### Async Multi-Agent Task
+
+```
+User → Caller Agent
+    │
+    ├── spawn_agent("researcher", task="...")
+    │   Returns: "Agent spawned, running in background"
+    │
+    ├── Caller responds to user immediately
+    │
+    │   [Background]
+    │   ├── Spawned agent pod starts
+    │   ├── Task sent via /api/chat/{id}/send
+    │   ├── Spawned agent executes (may call tools)
+    │   ├── Result saved as system message in caller's session
+    │   ├── Caller re-triggered via /api/chat/{caller}/send
+    │   ├── Caller processes result, generates follow-up
+    │   ├── If Telegram: pushed to chat
+    │   └── Spawned agent pod deleted
+```
+
 ## Kubernetes Resource Model
 
 ### Labels
@@ -201,7 +366,7 @@ All resources use consistent labels:
 | Label | Values | Purpose |
 |-------|--------|---------|
 | `app` | `falcon-eye` | Identifies all Falcon-Eye resources |
-| `component` | `camera`, `recorder`, `cleanup`, `file-server` | Component type |
+| `component` | `camera`, `recorder`, `cleanup`, `file-server`, `agent` | Component type |
 | `camera-id` | UUID | Links camera pods/services to DB record |
 | `recorder-for` | UUID | Links recorder pods/services to camera |
 | `protocol` | `usb`, `rtsp`, `onvif`, `http` | Camera protocol type |
@@ -215,6 +380,8 @@ All resources use consistent labels:
 | Recorder Deployment | `rec-{name-slug}` | `rec-office-cam` |
 | Recorder Service | `svc-rec-{name-slug}` | `svc-rec-office-cam` |
 | File-Server DaemonSet | `falcon-eye-file-server` | (one per cluster) |
+| Agent Deployment | `agent-{slug}` | `agent-main-assistant` |
+| Agent Service | `svc-agent-{slug}` | `svc-agent-main-assistant` |
 
 ### Service Types
 
@@ -225,6 +392,7 @@ All resources use consistent labels:
 | Camera streams | 8081 | ClusterIP | Internal only |
 | PostgreSQL | 5432 | ClusterIP | Internal only |
 | Recorder pods | 8080 | ClusterIP | Internal only |
+| Agent pods | 8080 | ClusterIP | Internal only |
 | File-Server | 8080 | Headless ClusterIP | Internal only |
 
 ### RBAC

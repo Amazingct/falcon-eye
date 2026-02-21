@@ -396,20 +396,19 @@ async def _background_spawn_task(
     caller_session_id: str | None,
 ):
     """Run in background after spawn_agent returns. Waits for the new agent to
-    be reachable, executes the task, posts the result back to the caller's
-    session, re-triggers the caller agent, and cleans up the ephemeral pod."""
+    be reachable, executes the task, delivers the result to the caller agent,
+    and cleans up the ephemeral pod."""
     try:
         task_response = await _wait_and_send_task(
             agent_id, task, source_user=caller_agent_id,
         )
 
         if caller_agent_id and caller_session_id:
-            await _post_callback(caller_agent_id, caller_session_id, agent_name, task_response)
-            await _retrigger_caller(caller_agent_id, caller_session_id, agent_name)
+            await _retrigger_caller(caller_agent_id, caller_session_id, agent_name, task_response)
     except Exception as exc:
         logger.error("Background spawn task failed for agent %s: %s", agent_id, exc)
         if caller_agent_id and caller_session_id:
-            await _post_callback(
+            await _retrigger_caller(
                 caller_agent_id, caller_session_id, agent_name,
                 f"(background task failed: {exc})",
             )
@@ -425,20 +424,18 @@ async def _background_delegate_task(
     caller_session_id: str | None,
 ):
     """Run in background after delegate_task returns. Sends the task to the
-    already-running target agent, posts the result back to the caller's
-    session, and re-triggers the caller agent."""
+    already-running target agent and delivers the result to the caller agent."""
     try:
         task_response = await _wait_and_send_task(
             agent_id, task, source_user=caller_agent_id, retries=1,
         )
 
         if caller_agent_id and caller_session_id:
-            await _post_callback(caller_agent_id, caller_session_id, agent_name, task_response)
-            await _retrigger_caller(caller_agent_id, caller_session_id, agent_name)
+            await _retrigger_caller(caller_agent_id, caller_session_id, agent_name, task_response)
     except Exception as exc:
         logger.error("Background delegate task failed for agent %s: %s", agent_id, exc)
         if caller_agent_id and caller_session_id:
-            await _post_callback(
+            await _retrigger_caller(
                 caller_agent_id, caller_session_id, agent_name,
                 f"(delegated task failed: {exc})",
             )
@@ -465,40 +462,28 @@ async def _wait_and_send_task(agent_id: str, task: str,
     return f"(agent did not respond after {retries} attempts — last error: {last_error})"
 
 
-async def _post_callback(caller_agent_id: str, caller_session_id: str,
-                          agent_name: str, response: str):
-    """Inject the completed-task result into the caller's chat session."""
-    try:
-        await _api_post(f"/api/chat/{caller_agent_id}/messages/save", {
-            "session_id": caller_session_id,
-            "role": "system",
-            "content": (
-                f"[Task result from agent '{agent_name}']\n\n{response}"
-            ),
-            "source": "agent",
-            "source_user": agent_name,
-        })
-    except Exception:
-        pass
-
-
 async def _retrigger_caller(caller_agent_id: str, caller_session_id: str,
-                             agent_name: str):
-    """Re-invoke the caller agent so it processes the newly-added system
-    message from the completed background task."""
+                             agent_name: str, task_response: str):
+    """Re-invoke the caller agent with the completed task result.
+
+    The result is delivered as a single *user* message (not a system message)
+    so that LangGraph doesn't reject it for having non-consecutive system
+    messages in the conversation history."""
     try:
         result = await _api_post(f"/api/chat/{caller_agent_id}/send", {
             "message": (
-                f"[The agent '{agent_name}' you dispatched has completed its task. "
-                f"The full result has been added to your context above. "
-                f"Review it and continue with the user's workflow.]"
+                f"[Automated callback — the agent '{agent_name}' you dispatched "
+                f"has completed its task. Here is the result:]\n\n"
+                f"{task_response}\n\n"
+                f"[Please review the result above and relay the key findings "
+                f"to the user. Summarize if the result is long.]"
             ),
             "session_id": caller_session_id,
-            "source": "system",
+            "source": "agent",
+            "source_user": agent_name,
         })
         response_text = result.get("response", "")
 
-        # If the caller is a Telegram agent, push the response to the chat
         if response_text:
             await _try_push_telegram(caller_agent_id, response_text)
     except Exception as exc:
@@ -564,6 +549,81 @@ async def clone_agent(source_agent_id: str, new_name: str, override_system_promp
         return f"Agent '{new_name}' cloned from '{source['name']}' (new id: {result.get('id')})"
     except Exception as e:
         return f"Error cloning agent: {e}"
+
+
+async def create_cron_job(name: str, cron_expr: str, prompt: str,
+                          timezone: str = "UTC", timeout_seconds: int = 120,
+                          **kwargs) -> str:
+    """Create a scheduled cron job that sends a prompt to this agent on a
+    recurring schedule. The cron results are delivered to the caller's current
+    chat session so the conversation stays continuous."""
+    agent_ctx = kwargs.get("_agent_context", {})
+    agent_id = agent_ctx.get("agent_id")
+    session_id = agent_ctx.get("session_id")
+
+    if not agent_id:
+        return "Cannot create cron job: agent context not available."
+
+    try:
+        payload = {
+            "name": name,
+            "agent_id": agent_id,
+            "cron_expr": cron_expr,
+            "timezone": timezone,
+            "session_id": session_id,
+            "prompt": prompt,
+            "timeout_seconds": timeout_seconds,
+            "enabled": True,
+        }
+        result = await _api_post("/api/cron/", payload)
+        cron_id = result.get("id", "unknown")
+        return (
+            f"Cron job '{name}' created (id: {cron_id}).\n"
+            f"Schedule: `{cron_expr}` ({timezone})\n"
+            f"Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}\n"
+            f"Results will be delivered to this session."
+        )
+    except Exception as e:
+        return f"Error creating cron job: {e}"
+
+
+async def list_cron_jobs(**kwargs) -> str:
+    """List all cron jobs for the calling agent."""
+    agent_ctx = kwargs.get("_agent_context", {})
+    agent_id = agent_ctx.get("agent_id")
+
+    try:
+        result = await _api_get("/api/cron/")
+        jobs = result.get("cron_jobs", [])
+        if agent_id:
+            jobs = [j for j in jobs if j.get("agent_id") == agent_id]
+        if not jobs:
+            return "No cron jobs found."
+
+        lines = []
+        for j in jobs:
+            status = "enabled" if j.get("enabled") else "disabled"
+            last = j.get("last_status") or "never run"
+            lines.append(
+                f"- **{j['name']}** (id: `{j['id']}`)\n"
+                f"  Schedule: `{j['cron_expr']}` | Status: {status} | Last: {last}\n"
+                f"  Prompt: {j['prompt'][:80]}{'...' if len(j['prompt']) > 80 else ''}"
+            )
+        return f"Found {len(jobs)} cron job(s):\n\n" + "\n".join(lines)
+    except Exception as e:
+        return f"Error listing cron jobs: {e}"
+
+
+async def delete_cron_job(cron_id: str, **kwargs) -> str:
+    """Delete a cron job by ID."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            res = await client.delete(f"{API_BASE}/api/cron/{cron_id}")
+            if res.status_code == 200:
+                return f"Cron job deleted (id: {cron_id})."
+            return f"Failed to delete cron job: {res.text[:200]}"
+    except Exception as e:
+        return f"Error deleting cron job: {e}"
 
 
 async def analyze_camera(camera_id: str, mode: str = "snapshot", duration: int = 3, **kwargs) -> str:

@@ -164,11 +164,81 @@ This starts both the API and a local PostgreSQL. Note: K8s operations won't work
 |------|---------|
 | `app/main.py` | FastAPI entry point, startup, routers |
 | `app/config.py` | Pydantic settings (env vars) |
-| `app/routes/` | HTTP endpoints (cameras, recordings, nodes, settings) |
+| `app/routes/cameras.py` | Camera CRUD, start/stop, stream proxy |
+| `app/routes/agents.py` | Agent CRUD, start/stop/restart |
+| `app/routes/agent_chat.py` | Chat send/history, proxies to agent pods |
+| `app/routes/tools.py` | Tool listing, execution, agent tool management |
+| `app/routes/files.py` | Shared filesystem API |
+| `app/tools/registry.py` | Tool definitions (schemas, categories) |
+| `app/tools/handlers.py` | Tool implementations (camera ops, agents, web search, filesystem) |
 | `app/services/k8s.py` | K8s deployment/service CRUD |
 | `app/services/converters.py` | Per-protocol container spec generators |
-| `app/chatbot/` | AI chatbot (Anthropic Claude) |
 | `app/tasks/cleanup.py` | CronJob: orphan cleanup |
+
+## Agent Development
+
+### Agent Pod (`scripts/agent/`)
+
+The agent pod runs LangGraph-powered AI agents. It has two key files:
+
+| File | Purpose |
+|------|---------|
+| `main.py` | FastAPI app: `/chat/send`, `/process`, `/health`, Telegram bot |
+| `tool_executor.py` | Builds LangChain `StructuredTool` instances from OpenAI function schemas |
+
+### Adding a New Tool
+
+1. **Define the tool** in `scripts/cam-manager-py/app/tools/registry.py`:
+
+```python
+"my_tool": {
+    "name": "my_tool",
+    "description": "What this tool does (shown to the LLM)",
+    "category": "my_category",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "param1": {"type": "string", "description": "Parameter description"},
+        },
+        "required": ["param1"],
+    },
+    "handler": "app.tools.handlers.my_tool",
+},
+```
+
+2. **Implement the handler** in `scripts/cam-manager-py/app/tools/handlers.py`:
+
+```python
+async def my_tool(param1: str, **kwargs) -> str:
+    agent_ctx = kwargs.get("_agent_context", {})
+    # Implementation...
+    return "Result text"
+```
+
+3. **Enable on an agent**: Add the tool ID (`my_tool`) to the agent's tool list via the dashboard or API.
+
+No changes needed on the agent pod side — tools are dynamically built from schemas at runtime.
+
+### Testing Tools Locally
+
+```bash
+# Execute a tool directly via the API
+curl -X POST http://localhost:8000/api/tools/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"tool_name": "list_cameras", "arguments": {}}'
+```
+
+### Agent Pod Logs
+
+```bash
+# Main agent logs
+kubectl logs -n falcon-eye -l component=agent -f
+
+# Specific agent
+kubectl logs -n falcon-eye deploy/agent-main-assistant -f
+```
+
+---
 
 ## Building Individual Images
 
@@ -209,6 +279,12 @@ kubectl logs -n falcon-eye -l component=camera -f
 
 # Recorder pod logs
 kubectl logs -n falcon-eye -l component=recorder -f
+
+# Agent pod logs (all agents)
+kubectl logs -n falcon-eye -l component=agent -f
+
+# Specific agent logs
+kubectl logs -n falcon-eye deploy/agent-main-assistant -f
 ```
 
 ### Debugging
@@ -278,6 +354,25 @@ To test the production nginx build in-cluster:
 docker build -t ghcr.io/amazingct/falcon-eye-dashboard:latest frontend/
 k3d image import ghcr.io/amazingct/falcon-eye-dashboard:latest -c falcon-eye
 kubectl rollout restart deployment/falcon-eye-dashboard -n falcon-eye
+```
+
+### "I changed the agent code"
+
+```bash
+docker build -t ghcr.io/amazingct/falcon-eye-agent:latest scripts/agent/
+k3d image import ghcr.io/amazingct/falcon-eye-agent:latest -c falcon-eye
+# Restart all agent pods to pick up the new image
+kubectl rollout restart deployment -l component=agent -n falcon-eye
+```
+
+### "I changed a tool handler or registry"
+
+Tool handlers run on the API pod, not the agent pod. Rebuild and restart the API:
+
+```bash
+docker build -t ghcr.io/amazingct/falcon-eye-api:latest scripts/cam-manager-py/
+k3d image import ghcr.io/amazingct/falcon-eye-api:latest -c falcon-eye
+kubectl rollout restart deployment/falcon-eye-api -n falcon-eye
 ```
 
 ### "I changed the camera relay or recorder"

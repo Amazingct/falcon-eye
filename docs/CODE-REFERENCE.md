@@ -25,17 +25,25 @@ falcon-eye/
 │   │       │   ├── cameras.py          # Camera CRUD + start/stop/restart + recording control + stream proxy
 │   │       │   ├── recordings.py       # Recordings CRUD + download (via file-server DaemonSet)
 │   │       │   ├── nodes.py            # Node listing + USB/network camera scanning
-│   │       │   └── settings.py         # Settings CRUD + restart-all + clear-all
+│   │       │   ├── settings.py         # Settings CRUD + restart-all + clear-all
+│   │       │   ├── agents.py           # Agent CRUD + start/stop/restart
+│   │       │   ├── agent_chat.py       # Chat send/history/sessions (proxies to agent pods)
+│   │       │   ├── tools.py            # Tool listing + execution + agent tool management
+│   │       │   ├── files.py            # Shared filesystem API (read/write/upload/delete)
+│   │       │   └── cron_routes.py      # Cron job management
+│   │       ├── tools/
+│   │       │   ├── registry.py         # Tool definitions (name, schema, category, handler)
+│   │       │   └── handlers.py         # Tool implementations (camera ops, agents, filesystem, web search)
+│   │       ├── models/
+│   │       │   ├── camera.py           # Camera ORM model + enums
+│   │       │   ├── recording.py        # Recording ORM model (incl. node_name)
+│   │       │   ├── agent.py            # Agent + AgentChatMessage ORM models
+│   │       │   └── schemas.py          # Pydantic request/response schemas
 │   │       ├── services/
 │   │       │   ├── k8s.py              # K8s deployment/service generation + CRUD
 │   │       │   └── converters.py       # Protocol-specific container spec generators
-│   │       ├── tasks/
-│   │       │   └── cleanup.py          # CronJob: orphan cleanup + recording fix
-│   │       └── chatbot/                # AI chatbot (Anthropic Claude)
-│   │           ├── __init__.py
-│   │           ├── graph.py
-│   │           ├── router.py
-│   │           └── tools.py
+│   │       └── tasks/
+│   │           └── cleanup.py          # CronJob: orphan cleanup + recording fix
 │   │
 │   ├── camera-rtsp/                    # RTSP/ONVIF/HTTP relay image
 │   │   ├── Dockerfile
@@ -45,6 +53,11 @@ falcon-eye/
 │   ├── camera-usb/                     # USB camera image
 │   │   ├── Dockerfile
 │   │   └── motion.conf                 # Default Motion config (overwritten at runtime)
+│   │
+│   ├── agent/                          # LangGraph Agent Pod
+│   │   ├── Dockerfile
+│   │   ├── main.py                     # FastAPI entry: /chat/send, /process, Telegram bot
+│   │   └── tool_executor.py            # Builds LangChain StructuredTools from API schemas
 │   │
 │   └── recorder/                       # Recorder image
 │       ├── Dockerfile
@@ -117,9 +130,9 @@ Uses `pydantic-settings` to load from environment variables:
 - Fields: camera_id, camera_name (preserved), file_path, file_name, start_time, end_time, duration_seconds, file_size_bytes, status, error_message, camera_deleted flag, **node_name** (tracks which node holds the recording file)
 - Statuses: `recording`, `stopped`, `completed`, `failed`, `error`
 
-#### `ChatSession` / `ChatMessage` (`models/chat.py`)
-- Session: UUID PK, name, timestamps
-- Message: UUID PK, session FK (cascade delete), role (user/assistant), content text, timestamp
+#### `Agent` / `AgentChatMessage` (`models/agent.py`)
+- Agent: UUID PK, name, slug (unique), type, provider, model, api_key_ref, system_prompt, temperature, max_tokens, channel_type, channel_config (JSON), tools (JSON array of tool IDs), status, deployment_name, service_name, node_name, cpu_limit, memory_limit, timestamps
+- AgentChatMessage: UUID PK, agent_id FK, session_id, role (user/assistant/system), content, source, source_user, prompt_tokens, completion_tokens, timestamps
 
 ### Routes
 
@@ -149,6 +162,42 @@ The `download` endpoint locates recording files across the cluster by querying f
 
 - **List/Get**: Wraps K8s node API. Returns name, IP, ready status, taints, labels, architecture.
 - **Scan**: SSH into each node using `paramiko` to enumerate `/dev/video*` devices. Network scan probes common camera ports (554, 8554, 80, 8080, 8899) across the subnet with socket connection tests.
+
+#### Agents (`routes/agents.py`)
+
+Full CRUD for agent configuration plus lifecycle management:
+
+- **List/Get/Create/Update/Delete**: Standard CRUD with slug uniqueness check
+- **Start**: Creates K8s Deployment + ClusterIP Service using the agent image. Mounts the shared filesystem PVC. Injects agent config (ID, provider, channel config) as environment variables.
+- **Stop**: Deletes K8s Deployment and Service, updates status to `stopped`
+- **Restart**: Stop + Start sequence
+- **Delete protection**: The main agent cannot be deleted
+
+#### Agent Chat (`routes/agent_chat.py`)
+
+Proxies chat messages to agent pods and manages chat history:
+
+- **Send** (`POST /{agent_id}/send`): Saves user message, builds LLM context (system prompt + tool schemas + chat history), proxies to agent pod's `/chat/send`, saves assistant response, returns result with optional media
+- **History** (`GET /{agent_id}/history`): Paginated chat history with session filter
+- **Save** (`POST /{agent_id}/messages/save`): Direct message save (used by agent pods for Telegram messages and inter-agent callbacks)
+- **Sessions** (`GET /{agent_id}/sessions`): List sessions with message counts
+- **Session locking**: Uses per-session `asyncio.Lock` to prevent concurrent writes to the same session
+
+#### Tools (`routes/tools.py`)
+
+- **List tools** (`GET /api/tools/`): All tools grouped by category
+- **Execute** (`POST /api/tools/execute`): Runs a tool handler and returns result + media. Used by agent pods to execute tools via the API.
+- **Agent tools** (`GET/PUT /api/agents/{id}/tools`): Get/set which tools an agent has access to
+- **Chat config** (`GET /api/agents/{id}/chat-config`): Returns everything an agent pod needs for autonomous operation (tool schemas, system prompt, LLM credentials)
+
+#### Files (`routes/files.py`)
+
+Shared filesystem API for inter-agent file exchange:
+
+- **List/Read/Write/Upload/Delete/Info/Mkdir**: Full filesystem operations
+- **Path safety**: All paths are resolved relative to `AGENT_FILES_ROOT` with traversal prevention
+- **Append mode**: `POST /write` supports `append: true` for log-style files
+- **Binary upload**: `POST /upload/{path}` for images, media, etc.
 
 #### Settings (`routes/settings.py`)
 
@@ -247,6 +296,97 @@ The nginx config uses `envsubst` (built into `nginx:alpine`) to inject `$API_URL
 
 The stream proxy location uses a regex to match camera stream URLs and applies very long timeouts (86400s) to keep the continuous MJPEG stream alive without nginx closing the connection.
 
+### Tool System
+
+#### Registry (`tools/registry.py`)
+
+Defines all available tools as a flat dictionary (`TOOLS_REGISTRY`). Each tool has:
+- `name`: Function name used in LLM tool calls
+- `description`: Shown to the LLM to decide when to use the tool
+- `category`: Grouping (cameras, recording, system, agents, filesystem, alerts, external, messaging)
+- `parameters`: OpenAI function calling schema (JSON Schema)
+- `handler`: Dotted path to the async handler function
+
+Helper functions:
+- `get_openai_function_schema(tool_id)`: Converts a registry entry to OpenAI function calling format
+- `get_tools_for_agent(tool_ids)`: Returns schemas for a list of tool IDs
+- `get_tools_grouped()`: Groups all tools by category for the UI
+
+#### Handlers (`tools/handlers.py`)
+
+Async handler implementations for every tool. Key patterns:
+
+- All handlers accept `**kwargs` and extract `_agent_context` for caller identity
+- `execute_tool(tool_name, arguments, agent_context)` is the central dispatcher — resolves the handler by name, injects context, runs it, and returns `(result_text, media_list)`
+- Internal API calls use `_api_get()` / `_api_post()` helpers that talk to `localhost:{port}`
+
+**Camera tools**: `list_cameras`, `camera_status`, `control_camera`, `camera_snapshot` (captures MJPEG frame and uploads to shared filesystem), `analyze_camera` (sends frame to vision LLM)
+
+**Agent tools**: `spawn_agent`, `delegate_task`, `clone_agent`
+- `spawn_agent` with a task is **non-blocking**: creates the agent, starts the pod, fires off `_background_spawn_task` via `asyncio.create_task`, and returns immediately
+- The background task waits for the pod, executes the task, posts the result as a system message to the caller's session, re-triggers the caller agent, then cleans up the ephemeral pod
+- `delegate_task` follows the same async pattern via `_background_delegate_task`
+
+**Background helpers**:
+- `_background_spawn_task()`: Full lifecycle — execute → callback → retrigger caller → cleanup pod
+- `_background_delegate_task()`: Execute → callback → retrigger caller (no cleanup)
+- `_wait_and_send_task()`: Polls agent until reachable, then sends task via chat API
+- `_post_callback()`: Injects a system message into the caller's session
+- `_retrigger_caller()`: Sends a follow-up message to re-invoke the caller agent's LLM
+- `_try_push_telegram()`: If the caller has Telegram configured, pushes the response to the chat
+- `_cleanup_agent()`: Stops pod and deletes DB record
+
+**Filesystem tools**: `file_read`, `file_write`, `file_list`, `file_delete`, `send_media` (marks files for delivery to the user's chat channel)
+
+**External tools**: `web_search` (DuckDuckGo HTML + instant answer fallback), `custom_api_call`, `send_alert` (log to file + push to Telegram agents)
+
+---
+
+## Agent Pod (`scripts/agent/`)
+
+### Technology Stack
+
+- **Framework**: FastAPI on Uvicorn, port 8080
+- **LLM**: LangGraph `create_react_agent` (ReAct pattern)
+- **Providers**: `langchain-anthropic` (ChatAnthropic) and `langchain-openai` (ChatOpenAI)
+- **Tool execution**: Dynamic `StructuredTool` instances built from OpenAI function schemas at runtime
+
+### Entry Point (`main.py`)
+
+Two modes of operation:
+
+1. **API-proxied chat** (`POST /chat/send`): Receives pre-built messages + tool schemas + agent config from the API server. Runs the LangGraph agent loop. Returns the final response text, token counts, and collected media.
+
+2. **Channel adapters** (`POST /process`): For Telegram and webhooks. The agent pod autonomously fetches its chat config from the API (`GET /api/agents/{id}/chat-config`), builds messages from stored history, runs the LangGraph agent, saves messages back to the API, and delivers responses via the channel.
+
+### Telegram Integration
+
+If `CHANNEL_TYPE=telegram`, the agent pod starts a Telegram bot on startup using `python-telegram-bot`. The bot:
+- Receives messages via long polling
+- Fetches chat config and history from the API
+- Runs the LangGraph agent
+- Sends text responses and media (photos/videos/documents) to the Telegram chat
+- Saves all messages to the API for session continuity
+
+### Tool Executor (`tool_executor.py`)
+
+`build_tools(tools_schema, media_collector, api_url, agent_context)` dynamically constructs `StructuredTool` instances from OpenAI function schemas:
+
+1. For each tool in the schema, creates a Pydantic model from the `parameters` definition
+2. Wraps execution in an async function that `POST`s to `/api/tools/execute` on the API server
+3. Collects any `media` items from the API response into the shared `media_collector` list
+4. Returns a list of LangChain-compatible tools for the LangGraph agent
+
+### LangGraph Agent Loop
+
+The ReAct agent loop:
+1. LLM receives system prompt + conversation history + available tools
+2. LLM decides: respond directly or call a tool
+3. If tool call: `StructuredTool._execute()` → HTTP POST to API → handler runs → result returned
+4. LLM processes tool result, decides next action
+5. Loop continues until LLM produces a final text response
+6. Token usage is tracked from `AIMessage.usage_metadata`
+
 ---
 
 ## Camera Relay Images
@@ -321,7 +461,8 @@ Files are stored at: `/data/falcon-eye/recordings/{camera_id}/{camera_name}_{tim
 | Image | Dockerfile | Base | Key Packages |
 |-------|-----------|------|-------------|
 | `falcon-eye-api` | `scripts/cam-manager-py/Dockerfile` | Python 3.11-slim | FastAPI, SQLAlchemy, kubernetes, httpx |
-| `falcon-eye-dashboard` | `frontend/Dockerfile` | Multi-stage: node:20 → nginx:alpine | React, Vite, Tailwind |
+| `falcon-eye-dashboard` | `frontend/Dockerfile` | Multi-stage: node:20 → nginx:alpine | React, Vite, Tailwind, react-markdown |
+| `falcon-eye-agent` | `scripts/agent/Dockerfile` | Python 3.11-slim | LangGraph, langchain-anthropic, langchain-openai, python-telegram-bot |
 | `falcon-eye-camera-usb` | `scripts/camera-usb/Dockerfile` | Ubuntu 22.04 | motion |
 | `falcon-eye-camera-rtsp` | `scripts/camera-rtsp/Dockerfile` | Python 3.11-slim | FFmpeg, Flask, onvif-zeep |
 | `falcon-eye-recorder` | `scripts/recorder/Dockerfile` | Python 3.11-slim | FFmpeg, FastAPI, httpx |
@@ -344,6 +485,7 @@ All custom images are built for **linux/amd64** and **linux/arm64** via Docker B
 |-----|--------|-------------|
 | `build-api` | `falcon-eye-api` | `./scripts/cam-manager-py` |
 | `build-dashboard` | `falcon-eye-dashboard` | `./frontend` |
+| `build-agent` | `falcon-eye-agent` | `./scripts/agent` |
 | `build-recorder` | `falcon-eye-recorder` | `./scripts/recorder` |
 | `build-camera-usb` | `falcon-eye-camera-usb` | `./scripts/camera-usb` |
 | `build-camera-rtsp` | `falcon-eye-camera-rtsp` | `./scripts/camera-rtsp` |

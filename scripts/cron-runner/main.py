@@ -12,6 +12,7 @@ API_URL = os.getenv("API_URL", "http://falcon-eye-api:8000")
 AGENT_ID = os.getenv("AGENT_ID", "")
 CRON_JOB_ID = os.getenv("CRON_JOB_ID", "")
 PROMPT = os.getenv("PROMPT", "")
+SESSION_ID = os.getenv("SESSION_ID", "")
 TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "120"))
 
 TELEGRAM_API = "https://api.telegram.org"
@@ -110,9 +111,12 @@ def main():
     with httpx.Client(timeout=TIMEOUT_SECONDS + 10) as client:
         # 1. Send prompt to agent
         try:
+            payload = {"message": PROMPT, "source": "cron"}
+            if SESSION_ID:
+                payload["session_id"] = SESSION_ID
             res = client.post(
                 f"{API_URL}/api/chat/{AGENT_ID}/send",
-                json={"message": PROMPT, "source": "cron"},
+                json=payload,
             )
             if res.status_code == 200:
                 data = res.json()

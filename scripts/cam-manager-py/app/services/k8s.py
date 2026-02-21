@@ -750,6 +750,7 @@ async def create_k8s_cronjob(cron_job, agent) -> str:
                                     {"name": "AGENT_ID", "value": str(agent.id)},
                                     {"name": "CRON_JOB_ID", "value": str(cron_job.id)},
                                     {"name": "PROMPT", "value": cron_job.prompt},
+                                    {"name": "SESSION_ID", "value": cron_job.session_id or ""},
                                     {"name": "TIMEOUT_SECONDS", "value": str(cron_job.timeout_seconds)},
                                 ],
                                 "resources": {
@@ -844,6 +845,7 @@ async def trigger_k8s_cronjob(cron_job, agent) -> str:
                             {"name": "AGENT_ID", "value": str(agent.id)},
                             {"name": "CRON_JOB_ID", "value": str(cron_job.id)},
                             {"name": "PROMPT", "value": cron_job.prompt},
+                            {"name": "SESSION_ID", "value": cron_job.session_id or ""},
                             {"name": "TIMEOUT_SECONDS", "value": str(cron_job.timeout_seconds)},
                         ],
                         "resources": {

@@ -45,6 +45,7 @@ async def init_db():
         from sqlalchemy import text
         migrations = [
             "ALTER TABLE recordings ADD COLUMN IF NOT EXISTS node_name VARCHAR",
+            "ALTER TABLE cron_jobs ADD COLUMN IF NOT EXISTS session_id VARCHAR(100)",
         ]
         for sql in migrations:
             try:

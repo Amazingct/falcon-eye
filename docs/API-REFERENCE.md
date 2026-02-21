@@ -623,3 +623,321 @@ curl -X DELETE http://localhost:8000/api/settings/cameras/all
   "count": 5
 }
 ```
+
+---
+
+## Agents
+
+### `GET /api/agents/`
+
+List all agents.
+
+**Response:**
+```json
+{
+  "agents": [
+    {
+      "id": "550e8400-...",
+      "name": "Main Assistant",
+      "slug": "main-assistant",
+      "type": "pod",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "status": "running",
+      "channel_type": "telegram",
+      "tools": ["camera_list", "camera_snapshot", "agent_spawn"],
+      "deployment_name": "agent-main-assistant",
+      "service_name": "svc-agent-main-assistant",
+      "created_at": "2026-02-20T10:00:00"
+    }
+  ]
+}
+```
+
+---
+
+### `POST /api/agents/`
+
+Create a new agent.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Display name (1–100 chars) |
+| `slug` | string | yes | URL-safe identifier (1–50 chars, must be unique) |
+| `type` | string | | `pod` (default) |
+| `provider` | string | | `openai` (default), `anthropic` |
+| `model` | string | | LLM model name (default: `gpt-4o`) |
+| `api_key_ref` | string | | API key (or empty to use env var) |
+| `system_prompt` | string | | System prompt for the agent |
+| `temperature` | float | | 0–2 (default: 0.7) |
+| `max_tokens` | int | | Max response tokens (default: 4096) |
+| `channel_type` | string | | `telegram`, `webhook`, or null |
+| `channel_config` | object | | Channel-specific config (e.g. `{"bot_token": "...", "chat_id": "..."}`) |
+| `tools` | string[] | | Tool IDs from the registry |
+| `cpu_limit` | string | | K8s CPU limit (default: `500m`) |
+| `memory_limit` | string | | K8s memory limit (default: `512Mi`) |
+
+**Status Codes:** `201` Created, `409` Duplicate slug.
+
+---
+
+### `GET /api/agents/{agent_id}`
+
+Get agent details by UUID.
+
+---
+
+### `PATCH /api/agents/{agent_id}`
+
+Update agent configuration. All fields optional.
+
+---
+
+### `DELETE /api/agents/{agent_id}`
+
+Delete an agent and its K8s resources. The main agent cannot be deleted.
+
+---
+
+### `POST /api/agents/{agent_id}/start`
+
+Deploy the agent's K8s pod. Creates a Deployment and ClusterIP Service.
+
+---
+
+### `POST /api/agents/{agent_id}/stop`
+
+Stop the agent pod. Deletes K8s Deployment and Service.
+
+---
+
+### `POST /api/agents/{agent_id}/restart`
+
+Restart the agent pod (stop + start).
+
+---
+
+## Agent Chat
+
+### `POST /api/chat/{agent_id}/send`
+
+Send a message to an agent. Stores the user message, proxies to the agent pod for LLM processing, stores the response, and returns it.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `message` | string | yes | User message |
+| `session_id` | string | | Chat session ID (auto-generated if omitted) |
+| `source` | string | | `dashboard` (default), `telegram`, `agent`, `system` |
+| `source_user` | string | | Identifier of the message sender |
+
+**Response:**
+```json
+{
+  "response": "I found 3 cameras online...",
+  "session_id": "550e8400-...",
+  "timestamp": "2026-02-20T10:30:00",
+  "prompt_tokens": 1500,
+  "completion_tokens": 200,
+  "media": [
+    {"type": "photo", "path": "snapshots/cam-office.jpg", "caption": "Office camera snapshot"}
+  ]
+}
+```
+
+---
+
+### `GET /api/chat/{agent_id}/history`
+
+Get chat history for an agent.
+
+**Query Parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `session_id` | string | Filter by session |
+| `limit` | int | Max messages (default: 50, max: 200) |
+| `offset` | int | Pagination offset |
+
+---
+
+### `POST /api/chat/{agent_id}/messages/save`
+
+Save a message directly to an agent's chat history. Used by agent pods for Telegram/webhook messages and by inter-agent callbacks.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `session_id` | string | yes | Chat session ID |
+| `role` | string | yes | `user`, `assistant`, or `system` |
+| `content` | string | yes | Message content |
+| `source` | string | | Message source |
+| `source_user` | string | | Sender identifier |
+
+---
+
+### `GET /api/chat/{agent_id}/sessions`
+
+List chat sessions for an agent with message counts and timestamps.
+
+---
+
+### `POST /api/chat/{agent_id}/sessions/new`
+
+Create a new chat session and return its ID.
+
+---
+
+## Tools
+
+### `GET /api/tools/`
+
+List all available tools grouped by category.
+
+**Response:**
+```json
+{
+  "tools": {
+    "cameras": [
+      {
+        "id": "camera_list",
+        "name": "list_cameras",
+        "description": "Get all cameras and their current status",
+        "category": "cameras",
+        "parameters": { "type": "object", "properties": {} }
+      }
+    ],
+    "agents": [...],
+    "filesystem": [...],
+    ...
+  }
+}
+```
+
+---
+
+### `POST /api/tools/execute`
+
+Execute a tool by name. Used by agent pods to run tools via the API.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tool_name` | string | yes | Tool function name (e.g. `list_cameras`) |
+| `arguments` | object | | Tool arguments |
+| `agent_context` | object | | Agent context (provider, model, agent_id, session_id) |
+
+**Response:**
+```json
+{
+  "result": "Found 3 cameras:\n- **Office** (id: `abc-123`) — running | usb",
+  "media": [
+    {"type": "photo", "path": "snapshots/office.jpg", "caption": "Office snapshot"}
+  ]
+}
+```
+
+---
+
+### `GET /api/agents/{agent_id}/tools`
+
+Get the tools assigned to a specific agent.
+
+---
+
+### `PUT /api/agents/{agent_id}/tools`
+
+Set the tools for an agent.
+
+**Request Body:**
+```json
+{
+  "tools": ["camera_list", "camera_snapshot", "agent_spawn", "send_media"]
+}
+```
+
+---
+
+### `GET /api/agents/{agent_id}/chat-config`
+
+Get everything an agent pod needs for autonomous chat: tool schemas, system prompt, and LLM config. Used by agent pods handling Telegram/webhook messages.
+
+---
+
+## Files (Shared Filesystem)
+
+### `GET /api/files/`
+
+List files and directories at a given prefix.
+
+**Query Parameters:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `prefix` | string | Directory path (empty for root) |
+
+**Response:**
+```json
+{
+  "path": "snapshots",
+  "files": [
+    {
+      "name": "office.jpg",
+      "path": "snapshots/office.jpg",
+      "is_dir": false,
+      "size": 52428,
+      "modified": "2026-02-20T10:30:00+00:00",
+      "mime_type": "image/jpeg"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /api/files/read/{file_path}`
+
+Read a text file's content, or download a binary file.
+
+---
+
+### `POST /api/files/write`
+
+Write text content to a file. Creates parent directories as needed.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `path` | string | yes | File path relative to root |
+| `content` | string | yes | Text content |
+| `append` | bool | | Append instead of overwrite (default: false) |
+
+---
+
+### `POST /api/files/upload/{file_path}`
+
+Upload a binary file (multipart form). Creates parent directories.
+
+---
+
+### `DELETE /api/files/{file_path}`
+
+Delete a file or empty directory.
+
+---
+
+### `GET /api/files/info/{file_path}`
+
+Get metadata about a file (size, mime type, modified date).
+
+---
+
+### `POST /api/files/mkdir/{dir_path}`
+
+Create a directory (and parent directories).

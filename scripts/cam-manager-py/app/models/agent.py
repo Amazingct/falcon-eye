@@ -130,6 +130,9 @@ class CronJob(Base):
     cron_expr = Column(String(100), nullable=False)
     timezone = Column(String(50), default="UTC")
 
+    # Session — when set, cron results are delivered to this session
+    session_id = Column(String(100), nullable=True)
+
     # Prompt
     prompt = Column(Text, nullable=False)
 
@@ -158,6 +161,7 @@ class CronJob(Base):
             "agent_id": str(self.agent_id),
             "cron_expr": self.cron_expr,
             "timezone": self.timezone,
+            "session_id": self.session_id,
             "prompt": self.prompt,
             "cronjob_name": self.cronjob_name,
             "enabled": self.enabled,

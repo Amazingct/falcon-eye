@@ -79,13 +79,14 @@ The Settings page reads and writes to this ConfigMap. It stores:
 
 ## Secret: `falcon-eye-secrets`
 
-Created via the Settings page when you configure an API key:
+Created via the Settings page or installer when you configure API keys:
 
 | Key | Description |
 |-----|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key for the AI chatbot |
+| `ANTHROPIC_API_KEY` | Anthropic API key for AI agents |
+| `OPENAI_API_KEY` | OpenAI API key for AI agents |
 
-The API deployment is automatically patched to mount this secret and restarted to pick it up.
+The API deployment is automatically patched to mount this secret and restarted to pick it up. Agent pods also receive the relevant key when the API proxies chat requests.
 
 ---
 
@@ -193,6 +194,40 @@ The ConfigMap `file-server-nginx-config` provides the nginx configuration for se
 
 ---
 
+## Agent Pod Environment Variables
+
+Set automatically when creating agent deployments:
+
+| Variable | Description |
+|----------|-------------|
+| `AGENT_ID` | Agent UUID (used to fetch config and save messages) |
+| `API_URL` | API server URL (e.g., `http://falcon-eye-api:8000`) |
+| `CHANNEL_TYPE` | `telegram`, `webhook`, or empty |
+| `CHANNEL_CONFIG` | JSON string with channel-specific config (e.g., bot token, chat ID) |
+| `AGENT_FILES_ROOT` | Shared filesystem mount path (default: `/agent-files`) |
+
+### Agent LLM Configuration
+
+LLM credentials are **not** stored as pod environment variables. Instead:
+- For **dashboard chat**: The API resolves the key and passes it to the agent pod in the chat request payload
+- For **Telegram/webhook**: The agent pod fetches its config from `GET /api/agents/{id}/chat-config`, which includes the resolved API key
+
+This keeps secrets centralized in the API pod.
+
+---
+
+## Shared Filesystem (Agent Files)
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| PVC Name | `falcon-eye-agent-files` | Persistent Volume Claim |
+| Size | 1Gi | Default storage size |
+| Mount Path | `/agent-files` | Mounted on API and all agent pods |
+| API Prefix | `/api/files/` | REST API for file operations |
+| Env Variable | `AGENT_FILES_ROOT` | Override mount path (default: `/agent-files`) |
+
+---
+
 ## Container Images
 
 Image names can be overridden via environment variables (useful for forks or private registries):
@@ -201,6 +236,7 @@ Image names can be overridden via environment variables (useful for forks or pri
 |----------|---------|
 | `CAMERA_USB_IMAGE` | `ghcr.io/amazingct/falcon-eye-camera-usb:latest` |
 | `CAMERA_RTSP_IMAGE` | `ghcr.io/amazingct/falcon-eye-camera-rtsp:latest` |
+| `AGENT_IMAGE` | `ghcr.io/amazingct/falcon-eye-agent:latest` |
 
 The recorder image is hardcoded in `k8s.py` as `ghcr.io/amazingct/falcon-eye-recorder:latest`.
 
@@ -212,4 +248,5 @@ The recorder image is hardcoded in `k8s.py` as `ghcr.io/amazingct/falcon-eye-rec
 |----------|---------|-------------|
 | `LOCAL_TEST` | `false` | Set to `true` to build all images from local source and use `imagePullPolicy: IfNotPresent`. See [DEVELOPER.md](DEVELOPER.md) for details. |
 | `FALCON_EYE_OWNER` | `amazingct` | GitHub owner for container image references. Change this when using a fork. |
-| `ANTHROPIC_API_KEY` | *(empty)* | If set before running the installer, enables the AI chatbot. Can also be configured later via the Settings page. |
+| `ANTHROPIC_API_KEY` | *(empty)* | Anthropic API key for AI agents. Can also be configured later via the Agents page. |
+| `OPENAI_API_KEY` | *(empty)* | OpenAI API key for AI agents. Can also be configured later via the Agents page. |
