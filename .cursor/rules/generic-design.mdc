@@ -25,3 +25,10 @@ All code must work on:
 - **Don't assume cluster labels exist**: Not all clusters label master nodes with `node-role.kubernetes.io/control-plane`. Always have fallbacks.
 - **Empty string = auto**: For node selectors and configuration, treat empty/unset values as "let Kubernetes decide" rather than defaulting to a detected node.
 - **Graceful degradation**: If an optional component (DaemonSet, service) isn't deployed yet, the system should return clear errors rather than crash.
+
+## Deployment Boundaries
+
+- **Never build Docker images** after code changes unless the user explicitly asks to.
+- **Never apply changes to a running cluster** (e.g., `kubectl apply`, `kubectl rollout restart`, re-running `install.sh`) unless the user explicitly instructs it.
+- **Never hot-fix a live deployment** by patching pods, editing ConfigMaps, or restarting services as a side effect of a code change.
+- Code changes are **local only** by default. The user decides when and how to build, push, and deploy.

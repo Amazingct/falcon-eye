@@ -42,6 +42,25 @@ if [ "$LOCAL_TEST" = "true" ]; then
     echo ""
 fi
 
+# Detect if a human terminal is available (works even with curl | bash)
+HAS_TTY=false
+if [ -t 0 ]; then
+    HAS_TTY=true
+elif [ -e /dev/tty ]; then
+    HAS_TTY=true
+fi
+
+# Read user input — works both normally and when piped via curl | bash
+prompt_read() {
+    local prompt="$1"
+    local varname="$2"
+    if [ -t 0 ]; then
+        read -p "$prompt" "$varname"
+    elif [ -e /dev/tty ]; then
+        read -p "$prompt" "$varname" < /dev/tty
+    fi
+}
+
 # Install k3s (Linux) or k3d (macOS)
 install_k3s() {
     OS_TYPE=$(uname -s)
@@ -231,12 +250,19 @@ setup_kubeconfig() {
     
     mkdir -p ~/.kube
     
-    # Read multiline input
+    # Read multiline input (use /dev/tty when piped via curl | bash)
     KUBECONFIG_CONTENT=""
-    while IFS= read -r line; do
-        [[ "$line" == "EOF" ]] && break
-        KUBECONFIG_CONTENT+="$line"$'\n'
-    done
+    if [ -t 0 ]; then
+        while IFS= read -r line; do
+            [[ "$line" == "EOF" ]] && break
+            KUBECONFIG_CONTENT+="$line"$'\n'
+        done
+    else
+        while IFS= read -r line < /dev/tty; do
+            [[ "$line" == "EOF" ]] && break
+            KUBECONFIG_CONTENT+="$line"$'\n'
+        done
+    fi
     
     echo "$KUBECONFIG_CONTENT" > ~/.kube/config
     chmod 600 ~/.kube/config
@@ -295,22 +321,23 @@ check_prerequisites() {
 
     ensure_kubectl
 
-    # Non-interactive mode (piped stdin): try the current context silently
-    if [ ! -t 0 ]; then
-        if kubectl cluster-info &> /dev/null 2>&1; then
-            echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
-            CLUSTER_NAME=$(kubectl config current-context 2>/dev/null || echo "unknown")
-            echo -e "  Cluster context: ${BLUE}${CLUSTER_NAME}${NC}"
-            return
-        else
-            echo -e "${RED}✗ No reachable Kubernetes cluster found (non-interactive mode).${NC}"
-            echo -e "  Set KUBECONFIG or configure ~/.kube/config and try again."
-            exit 1
-        fi
+    # Try the current context first
+    if kubectl cluster-info &> /dev/null 2>&1; then
+        echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
+        CLUSTER_NAME=$(kubectl config current-context 2>/dev/null || echo "unknown")
+        echo -e "  Cluster context: ${BLUE}${CLUSTER_NAME}${NC}"
+        return
+    fi
+
+    # No cluster found — need user input
+    if [ "$HAS_TTY" = "false" ]; then
+        echo -e "${RED}✗ No reachable Kubernetes cluster found (non-interactive mode).${NC}"
+        echo -e "  Set KUBECONFIG or configure ~/.kube/config and try again."
+        exit 1
     fi
 
     echo ""
-    echo -e "${CYAN}How would you like to set up the cluster?${NC}"
+    echo -e "${CYAN}No Kubernetes cluster found. How would you like to set one up?${NC}"
     echo ""
 
     if [ "$(uname -s)" = "Darwin" ]; then
@@ -323,7 +350,7 @@ check_prerequisites() {
     echo -e "  ${CYAN}2)${NC} Connect to an existing cluster"
     echo ""
 
-    read -p "Enter choice [1-2]: " SETUP_CHOICE
+    prompt_read "Enter choice [1-2]: " SETUP_CHOICE
     echo ""
 
     case $SETUP_CHOICE in
@@ -333,7 +360,7 @@ check_prerequisites() {
             else
                 echo -e "${YELLOW}This will install k3s on this machine.${NC}"
             fi
-            read -p "Continue? [y/N]: " CONFIRM_K3S
+            prompt_read "Continue? [y/N]: " CONFIRM_K3S
             if [[ "$CONFIRM_K3S" =~ ^[Yy]$ ]]; then
                 install_k3s
             else
@@ -385,7 +412,7 @@ choose_existing_cluster() {
     EXIT_IDX=$MENU_IDX
     echo ""
 
-    read -p "Enter choice [1-${EXIT_IDX}]: " CTX_CHOICE
+    prompt_read "Enter choice [1-${EXIT_IDX}]: " CTX_CHOICE
     echo ""
 
     # Validate input
@@ -485,7 +512,7 @@ select_node() {
     local VAR_NAME="$3"
     
     echo -e "  ${CYAN}${COMPONENT_NAME}${NC} - ${COMPONENT_DESC}"
-    read -p "  Choose node [0-${NODE_COUNT}] (default: 0): " NODE_CHOICE
+    prompt_read "  Choose node [0-${NODE_COUNT}] (default: 0): " NODE_CHOICE
     
     if [ -n "$NODE_CHOICE" ] && [ "$NODE_CHOICE" != "0" ] && [ "$NODE_CHOICE" -le "$NODE_COUNT" ] 2>/dev/null; then
         eval "${VAR_NAME}=\"${NODES[$((NODE_CHOICE-1))]}\""
@@ -506,7 +533,7 @@ configure_options() {
     fi
 
     # Non-interactive or upgrade: keep existing config, skip prompts
-    if [ ! -t 0 ] || [ "$IS_UPGRADE" = true ]; then
+    if [ "$HAS_TTY" = "false" ] || [ "$IS_UPGRADE" = true ]; then
         POSTGRES_NODE=""
         API_NODE=""
         DASHBOARD_NODE=""
@@ -550,7 +577,7 @@ configure_options() {
         
         echo -e "  ${CYAN}Recordings${NC} - Default node for recorder pods"
         echo -e "  ${YELLOW}Tip: Pin to one node to centralize all recordings on a single disk${NC}"
-        read -p "  Choose node [0-${NODE_COUNT}] (default: 0 = auto): " NODE_CHOICE
+        prompt_read "  Choose node [0-${NODE_COUNT}] (default: 0 = auto): " NODE_CHOICE
         
         if [ -n "$NODE_CHOICE" ] && [ "$NODE_CHOICE" != "0" ] && [ "$NODE_CHOICE" -le "$NODE_COUNT" ] 2>/dev/null; then
             RECORDER_NODE="${NODES[$((NODE_CHOICE-1))]}"
@@ -580,11 +607,11 @@ configure_options() {
     if [ -n "${EXISTING_ANTHROPIC_KEY:-}" ]; then
         MASKED_KEY="${EXISTING_ANTHROPIC_KEY:0:8}...${EXISTING_ANTHROPIC_KEY: -4}"
         echo -e "  Anthropic API key: ${GREEN}${MASKED_KEY}${NC} (already configured)"
-        read -p "  Press Enter to keep, or paste a new key to replace: " NEW_KEY
+        prompt_read "  Press Enter to keep, or paste a new key to replace: " NEW_KEY
         ANTHROPIC_API_KEY="${NEW_KEY:-$EXISTING_ANTHROPIC_KEY}"
     else
         echo -e "  Get an Anthropic key at: ${CYAN}https://console.anthropic.com/settings/keys${NC}"
-        read -p "  Enter Anthropic API key (or press Enter to skip): " ANTHROPIC_API_KEY
+        prompt_read "  Enter Anthropic API key (or press Enter to skip): " ANTHROPIC_API_KEY
     fi
     [ -n "$ANTHROPIC_API_KEY" ] && echo -e "${GREEN}  ✓ Anthropic key configured${NC}" || echo -e "${YELLOW}  ⚠ Skipped${NC}"
     echo ""
@@ -593,11 +620,11 @@ configure_options() {
     if [ -n "${EXISTING_OPENAI_KEY:-}" ]; then
         MASKED_KEY="${EXISTING_OPENAI_KEY:0:8}...${EXISTING_OPENAI_KEY: -4}"
         echo -e "  OpenAI API key: ${GREEN}${MASKED_KEY}${NC} (already configured)"
-        read -p "  Press Enter to keep, or paste a new key to replace: " NEW_KEY
+        prompt_read "  Press Enter to keep, or paste a new key to replace: " NEW_KEY
         OPENAI_API_KEY="${NEW_KEY:-$EXISTING_OPENAI_KEY}"
     else
         echo -e "  Get an OpenAI key at: ${CYAN}https://platform.openai.com/api-keys${NC}"
-        read -p "  Enter OpenAI API key (or press Enter to skip): " OPENAI_API_KEY
+        prompt_read "  Enter OpenAI API key (or press Enter to skip): " OPENAI_API_KEY
     fi
     [ -n "${OPENAI_API_KEY:-}" ] && echo -e "${GREEN}  ✓ OpenAI key configured${NC}" || echo -e "${YELLOW}  ⚠ Skipped${NC}"
     echo ""
