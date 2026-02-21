@@ -150,7 +150,7 @@ TOOLS_REGISTRY = {
     },
     "agent_spawn": {
         "name": "spawn_agent",
-        "description": "Create and start a new agent pod. Inherits calling agent's LLM config. If 'task' is provided, the agent executes it asynchronously in the background — this tool returns immediately so you can continue working. The result will be delivered to your session as a system message once the spawned agent finishes, and the ephemeral agent pod is automatically cleaned up.",
+        "description": "Create and start a new agent. Inherits calling agent's LLM config. If 'task' is provided, the agent runs as a one-off K8s Job (not a Deployment) — this tool returns immediately so you can continue working. The result will be delivered to your session once the Job finishes, and the ephemeral agent is automatically cleaned up. Do NOT call this repeatedly for the same task.",
         "category": "agents",
         "parameters": {
             "type": "object",
@@ -159,7 +159,7 @@ TOOLS_REGISTRY = {
                 "system_prompt": {"type": "string", "description": "System prompt (optional — defaults to generic)"},
                 "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool IDs to enable (optional — inherits parent's tools)"},
                 "channel_type": {"type": "string", "enum": ["telegram", "webhook", "custom"], "description": "Channel type (optional — inherits parent's)"},
-                "task": {"type": "string", "description": "A task for the agent to execute in the background. The result is delivered asynchronously as a system message."},
+                "task": {"type": "string", "description": "A task for the agent to execute as a background Job. The result is delivered asynchronously once complete."},
             },
             "required": ["name"],
         },
@@ -237,14 +237,14 @@ TOOLS_REGISTRY = {
     },
     "camera_analyze": {
         "name": "analyze_camera",
-        "description": "Take a screenshot or short recording (3-5 seconds) from a camera and analyze what's happening using vision AI. Returns an AI-generated description of what the camera sees.",
+        "description": "Capture frames from a camera and analyze what's happening using vision AI. In 'clip' mode, captures 1 frame per second over the duration (e.g. 5 frames over 5 seconds). Returns an AI-generated description of what the camera sees. Always use 'clip' mode when the user asks to analyze or describe what a camera is seeing.",
         "category": "cameras",
         "parameters": {
             "type": "object",
             "properties": {
                 "camera_id": {"type": "string", "description": "Camera UUID"},
-                "mode": {"type": "string", "enum": ["snapshot", "clip"], "description": "Capture a single frame (snapshot) or a short clip", "default": "snapshot"},
-                "duration": {"type": "integer", "minimum": 3, "maximum": 5, "description": "Clip duration in seconds (only for clip mode)", "default": 3},
+                "mode": {"type": "string", "enum": ["snapshot", "clip"], "description": "Single frame (snapshot) or multi-frame analysis (clip). Use 'clip' for analyzing activity.", "default": "clip"},
+                "duration": {"type": "integer", "minimum": 3, "maximum": 10, "description": "Number of seconds to capture (clip mode). Each second = 1 frame.", "default": 5},
             },
             "required": ["camera_id"],
         },

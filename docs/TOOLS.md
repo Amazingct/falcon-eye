@@ -171,20 +171,26 @@ Returns cluster resource usage summary and pod status.
 
 | Tool ID | Function Name | Description |
 |---------|--------------|-------------|
-| `agent_spawn` | `spawn_agent` | Create and start a new agent pod (async with task) |
+| `agent_spawn` | `spawn_agent` | Create and start a new agent (Job for tasks, Deployment for persistent) |
 | `agent_delegate` | `delegate_task` | Send a task to an already-running agent (async) |
 | `agent_create_from` | `clone_agent` | Clone an existing agent's configuration |
 
 ### `spawn_agent`
 
-Creates a new agent pod that inherits the calling agent's LLM config. If a `task` is provided, the tool **returns immediately** and the spawned agent executes the task asynchronously in the background. When the task completes:
+Creates a new agent that inherits the calling agent's LLM config. Behavior depends on whether a `task` is provided:
 
-1. The result is saved as a **system message** in the caller's chat session
-2. The caller agent is **re-triggered** to process the result
-3. If the caller has Telegram configured, the response is pushed to the chat
-4. The ephemeral agent pod is **automatically stopped and deleted**
+**With `task` (ephemeral — K8s Job):**
+- The agent runs as a **K8s Job** (run-to-completion, no restart)
+- The tool **returns immediately** so the caller can continue working
+- The spawned agent executes the task, posts the result back via the `/task-complete` callback
+- The callback re-triggers the caller agent with the result and pushes to Telegram if configured
+- The ephemeral agent DB record is **automatically deleted** on completion
+- The K8s Job is auto-cleaned via `ttlSecondsAfterFinished`
+- Ephemeral agents do NOT receive `spawn_agent`, `delegate_task`, or scheduling tools (prevents recursive loops)
 
-Without a `task`, the agent is created as a persistent pod that stays running.
+**Without `task` (persistent — K8s Deployment):**
+- The agent is created as a long-running Deployment with an HTTP server
+- It stays running until explicitly stopped
 
 **Parameters:**
 
@@ -192,17 +198,17 @@ Without a `task`, the agent is created as a persistent pod that stays running.
 |------|------|----------|-------------|
 | `name` | string | yes | Agent display name |
 | `system_prompt` | string | no | System prompt (defaults to generic) |
-| `tools` | string[] | no | Tool IDs to enable (inherits parent's if omitted) |
+| `tools` | string[] | no | Tool IDs to enable (inherits parent's if omitted; meta-tools filtered for tasks) |
 | `channel_type` | string | no | `telegram`, `webhook`, or `custom` (inherits parent's) |
-| `task` | string | no | Task to execute in the background |
+| `task` | string | no | Task to execute as a background Job |
 
 **Example:**
 ```
 Agent: I'll spawn a researcher to look into that for you.
 [calls spawn_agent(name="researcher", task="Find best practices for outdoor IP camera placement")]
-Tool returns: "Agent 'researcher' has been spawned and is executing the task in the background..."
-Agent: I've dispatched a researcher agent to look into outdoor camera placement. I'll let you know once it reports back.
-... (later, system message arrives with research results) ...
+Tool returns: "Agent 'researcher' has been spawned and is executing the task as a background Job..."
+Agent: I've dispatched a researcher agent to look into outdoor camera placement. I'll share the findings once it reports back.
+... (later, callback arrives with research results) ...
 Agent: The researcher found that outdoor cameras should be mounted 8-10 feet high...
 ```
 

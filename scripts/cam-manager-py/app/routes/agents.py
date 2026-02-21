@@ -1,17 +1,22 @@
 """Agent API routes"""
+import logging
 from uuid import UUID
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
+import httpx
 
 from app.database import get_db
 from app.models.agent import Agent
+from app.config import get_settings
 from app.services import k8s
 from app.tools.registry import TOOLS_REGISTRY
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agents", tags=["agents"])
+settings = get_settings()
 
 
 class AgentCreate(BaseModel):
@@ -126,10 +131,14 @@ async def delete_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
     if agent.slug == "main":
         raise HTTPException(status_code=400, detail="Cannot delete the main agent")
 
-    # Delete K8s resources if running
+    # Delete K8s resources — try both Deployment and Job since either might exist
     if agent.deployment_name:
         try:
             await k8s.delete_agent_deployment(agent.deployment_name, agent.service_name)
+        except Exception:
+            pass
+        try:
+            await k8s.delete_agent_job(agent.deployment_name)
         except Exception:
             pass
 
@@ -182,12 +191,123 @@ async def stop_agent(agent_id: UUID, db: AsyncSession = Depends(get_db)):
             await k8s.delete_agent_deployment(agent.deployment_name, agent.service_name)
         except Exception:
             pass
+        try:
+            await k8s.delete_agent_job(agent.deployment_name)
+        except Exception:
+            pass
 
     agent.status = "stopped"
     agent.deployment_name = None
     agent.service_name = None
     await db.commit()
     return {"message": "Agent stopped", "id": str(agent_id)}
+
+
+class StartTaskRequest(BaseModel):
+    task: str
+    caller_agent_id: Optional[str] = None
+    caller_session_id: Optional[str] = None
+
+
+@router.post("/{agent_id}/start-task")
+async def start_task(agent_id: UUID, data: StartTaskRequest, db: AsyncSession = Depends(get_db)):
+    """Start an ephemeral agent as a K8s Job for a one-time task."""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    try:
+        agent.status = "running"
+        await db.commit()
+
+        k8s_result = await k8s.create_agent_job(
+            agent, data.task, data.caller_agent_id, data.caller_session_id,
+        )
+        agent.deployment_name = k8s_result["job_name"]
+        await db.commit()
+
+        return {
+            "message": "Agent task started",
+            "id": str(agent_id),
+            "job_name": k8s_result["job_name"],
+        }
+    except Exception as e:
+        agent.status = "error"
+        await db.commit()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class TaskCompleteRequest(BaseModel):
+    result: str
+    caller_agent_id: Optional[str] = None
+    caller_session_id: Optional[str] = None
+
+
+@router.post("/{agent_id}/task-complete")
+async def task_complete(agent_id: UUID, data: TaskCompleteRequest, db: AsyncSession = Depends(get_db)):
+    """Callback from ephemeral agent Jobs. Receives the task result,
+    forwards it to the caller agent's chat session, pushes to Telegram
+    if applicable, and cleans up the ephemeral agent DB record."""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    agent_name = agent.name if agent else "unknown-agent"
+
+    if data.caller_agent_id and data.caller_session_id:
+        try:
+            api_base = f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(
+                    f"{api_base}/api/chat/{data.caller_agent_id}/send",
+                    json={
+                        "message": (
+                            f"[Automated callback — the agent '{agent_name}' you dispatched "
+                            f"has completed its task. Here is the result:]\n\n"
+                            f"{data.result}\n\n"
+                            f"[Please review the result above and relay the key findings "
+                            f"to the user. Do NOT spawn another agent for this — "
+                            f"just summarize the result and respond directly.]"
+                        ),
+                        "session_id": data.caller_session_id,
+                        "source": "agent",
+                        "source_user": agent_name,
+                    },
+                )
+
+                if resp.status_code == 200:
+                    response_text = resp.json().get("response", "")
+                    if response_text:
+                        caller_result = await db.execute(
+                            select(Agent).where(Agent.id == UUID(data.caller_agent_id))
+                        )
+                        caller_agent = caller_result.scalar_one_or_none()
+                        if caller_agent and caller_agent.channel_type == "telegram":
+                            cfg = caller_agent.channel_config or {}
+                            chat_id = cfg.get("chat_id")
+                            bot_token = cfg.get("bot_token")
+                            if chat_id and bot_token:
+                                try:
+                                    for i in range(0, len(response_text), 4096):
+                                        await client.post(
+                                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                                            json={
+                                                "chat_id": chat_id,
+                                                "text": response_text[i:i + 4096],
+                                            },
+                                        )
+                                except Exception as tg_err:
+                                    logger.warning("Telegram push failed: %s", tg_err)
+        except Exception as e:
+            logger.error("Failed to forward task result to caller agent: %s", e)
+
+    # Cleanup: delete the ephemeral agent DB record.
+    # K8s Job auto-cleans via ttlSecondsAfterFinished.
+    if agent:
+        await db.delete(agent)
+        await db.commit()
+        logger.info("Cleaned up ephemeral agent '%s' (%s)", agent_name, agent_id)
+
+    return {"status": "completed", "agent_name": agent_name}
 
 
 async def ensure_main_agent(db: AsyncSession):

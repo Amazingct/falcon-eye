@@ -207,6 +207,78 @@ curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh
 
 Shows: dashboard URL, pod status, image versions, and quick commands.
 
+## Troubleshooting
+
+### macOS: k3d cluster creation fails with `bufio.Scanner: token too long`
+
+```
+ERRO Failed Cluster Start: Failed to add one or more helper nodes:
+  Node k3d-falcon-eye-serverlb failed to get ready:
+  error waiting for log line `start worker processes` from node
+  'k3d-falcon-eye-serverlb': stopped returning log lines:
+  bufio.Scanner: token too long
+ERRO Failed to create cluster >>> Rolling Back
+```
+
+This is a known k3d issue on macOS where the load balancer node produces log output that exceeds k3d's internal buffer. Common causes and fixes:
+
+**1. Restart Docker Desktop** (fixes it most of the time)
+
+Docker Desktop can get into a bad state where containers produce excessive logs. Restart it from the menu bar icon, then retry.
+
+**2. Clean up stale state**
+
+If a previous cluster left behind broken containers or volumes:
+
+```bash
+k3d cluster delete falcon-eye 2>/dev/null
+docker volume prune -f
+docker system prune -f
+bash install.sh
+```
+
+**3. Port conflict**
+
+Something else may be using the ports k3d needs. Check with:
+
+```bash
+lsof -i :30800 -i :30900 -i :6443
+```
+
+Kill anything occupying those ports before retrying.
+
+**4. Increase Docker Desktop resources**
+
+Open Docker Desktop > Settings > Resources and ensure at least **4 GB RAM** and **2 CPUs** are allocated. The default 2 GB is often not enough for k3d with Falcon-Eye.
+
+**5. Nuclear option**
+
+If the above don't work, reset Docker Desktop entirely: Docker Desktop > Troubleshoot > "Clean / Purge data", then retry `bash install.sh`.
+
+### macOS: Cluster starts but pods are stuck in `Pending`
+
+This usually means Docker Desktop doesn't have enough resources. Increase RAM to at least 4 GB in Docker Desktop > Settings > Resources.
+
+### Linux: `install.sh` fails to install k3s
+
+The installer needs `curl` and root access to install k3s. Run with:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/Amazingct/falcon-eye/main/install.sh | sudo bash
+```
+
+### Upgrade: Pods not picking up new images
+
+The installer restarts all deployments on upgrade, but if `imagePullPolicy` is set to `IfNotPresent` (from a previous `LOCAL_TEST` run), the cluster won't pull new images from ghcr.io. Fix by running a normal install (without `LOCAL_TEST`):
+
+```bash
+bash install.sh
+```
+
+This sets `imagePullPolicy: Always` and restarts all pods.
+
+---
+
 ## Uninstall
 
 ```bash
@@ -263,5 +335,13 @@ kubectl delete clusterrolebinding falcon-eye-binding
 - Deployment: `rec-{name}` (recorder)
 - Service: `svc-rec-{name}` (ClusterIP for recorder)
 
-### Optional (created via Settings page)
-- Secret: `falcon-eye-secrets` (Anthropic API key)
+### Dynamic Resources (created per agent)
+- Deployment: `agent-{slug}` (LangGraph agent pod)
+- Service: `svc-agent-{slug}` (ClusterIP for agent)
+- PVC: `falcon-eye-agent-files` (shared filesystem, created once)
+
+### Dynamic Resources (created per cron job)
+- CronJob: `cron-{name}-{id}` (scheduled prompt execution)
+
+### Optional (created via Settings / Agents page)
+- Secret: `falcon-eye-secrets` (LLM API keys)

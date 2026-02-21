@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import re
-import tempfile
+import uuid as _uuid
 import httpx
 from app.config import get_settings
 
@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 API_BASE = f"http://localhost:{settings.port}"
+
+# Tools that ephemeral (task-based) agents must NOT inherit, to prevent
+# recursive spawning loops and unintended scheduling side-effects.
+EPHEMERAL_EXCLUDED_TOOLS = {
+    "agent_spawn", "agent_delegate", "agent_clone",
+    "cron_create", "cron_list", "cron_delete",
+}
 
 
 async def _api_get(path: str) -> dict:
@@ -283,9 +290,9 @@ async def web_search(query: str, **kwargs) -> str:
 async def spawn_agent(name: str, system_prompt: str = None, tools: list = None,
                       channel_type: str = None, task: str = None, **kwargs) -> str:
     """Create and start a new agent. Automatically inherits the calling agent's
-    LLM config. If ``task`` is provided the tool returns immediately and the
-    task is executed asynchronously — the result is posted back to the caller's
-    session as a system message once the spawned agent completes."""
+    LLM config. If ``task`` is provided the agent runs as a K8s Job
+    (run-to-completion, no restart). The result is posted back to the caller's
+    session once the Job finishes, and the ephemeral agent is auto-cleaned."""
     try:
         agent_ctx = kwargs.get("_agent_context", {})
         parent_agent_id = agent_ctx.get("agent_id")
@@ -298,7 +305,18 @@ async def spawn_agent(name: str, system_prompt: str = None, tools: list = None,
             except Exception:
                 pass
 
-        slug = re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")[:50]
+        # Unique slug to prevent 409 collisions on repeated spawns
+        short_id = str(_uuid.uuid4())[:8]
+        slug = re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")[:40]
+        slug = f"{slug}-{short_id}"
+
+        # For ephemeral (task) agents, strip out meta-tools that could cause loops
+        parent_tools = tools if tools is not None else parent_config.get("tools", [])
+        agent_tools = (
+            [t for t in parent_tools if t not in EPHEMERAL_EXCLUDED_TOOLS]
+            if task else parent_tools
+        )
+
         payload = {
             "name": name,
             "slug": slug,
@@ -310,39 +328,38 @@ async def spawn_agent(name: str, system_prompt: str = None, tools: list = None,
             "max_tokens": parent_config.get("max_tokens", 4096),
             "cpu_limit": parent_config.get("cpu_limit", "500m"),
             "memory_limit": parent_config.get("memory_limit", "512Mi"),
-            "channel_type": channel_type or parent_config.get("channel_type"),
-            "channel_config": parent_config.get("channel_config", {}),
-            "system_prompt": system_prompt or f"You are {name}, a Falcon-Eye agent.",
-            "tools": tools if tools is not None else parent_config.get("tools", []),
+            "channel_type": None if task else (channel_type or parent_config.get("channel_type")),
+            "channel_config": {} if task else parent_config.get("channel_config", {}),
+            "system_prompt": system_prompt or (
+                f"You are {name}, a specialized Falcon-Eye agent. "
+                f"Complete the assigned task thoroughly and concisely."
+            ),
+            "tools": agent_tools,
         }
         result = await _api_post("/api/agents/", payload)
         agent_id = result.get("id")
         if not agent_id:
             return f"Failed to create agent: {json.dumps(result)}"
 
-        start_result = await _api_post(f"/api/agents/{agent_id}/start")
-
         if not task:
+            # Persistent agent — create K8s Deployment (long-running)
+            start_result = await _api_post(f"/api/agents/{agent_id}/start")
             return (
                 f"Agent '{name}' created (id: {agent_id}) and started. "
                 f"Inherited config from parent agent. {start_result.get('message', '')}"
             )
 
-        # Fire-and-forget: task runs in background, result comes back asynchronously
-        asyncio.create_task(
-            _background_spawn_task(
-                agent_id=agent_id,
-                agent_name=name,
-                task=task,
-                caller_agent_id=parent_agent_id,
-                caller_session_id=caller_session_id,
-            )
-        )
+        # Ephemeral agent with task — create K8s Job (run once, callback, exit)
+        start_result = await _api_post(f"/api/agents/{agent_id}/start-task", {
+            "task": task,
+            "caller_agent_id": parent_agent_id,
+            "caller_session_id": caller_session_id,
+        })
 
         return (
             f"Agent '{name}' has been spawned (id: {agent_id}) and is executing the task "
-            f"in the background. You will receive the result as a system message once "
-            f"it completes. You can continue with other work in the meantime."
+            f"as a background Job. You will receive the result once it completes. "
+            f"Continue with other work in the meantime."
         )
     except Exception as e:
         return f"Error spawning agent: {e}"
@@ -387,34 +404,6 @@ async def delegate_task(agent_id: str, task: str, **kwargs) -> str:
 # ---------------------------------------------------------------------------
 #  Background task helpers
 # ---------------------------------------------------------------------------
-
-async def _background_spawn_task(
-    agent_id: str,
-    agent_name: str,
-    task: str,
-    caller_agent_id: str | None,
-    caller_session_id: str | None,
-):
-    """Run in background after spawn_agent returns. Waits for the new agent to
-    be reachable, executes the task, delivers the result to the caller agent,
-    and cleans up the ephemeral pod."""
-    try:
-        task_response = await _wait_and_send_task(
-            agent_id, task, source_user=caller_agent_id,
-        )
-
-        if caller_agent_id and caller_session_id:
-            await _retrigger_caller(caller_agent_id, caller_session_id, agent_name, task_response)
-    except Exception as exc:
-        logger.error("Background spawn task failed for agent %s: %s", agent_id, exc)
-        if caller_agent_id and caller_session_id:
-            await _retrigger_caller(
-                caller_agent_id, caller_session_id, agent_name,
-                f"(background task failed: {exc})",
-            )
-    finally:
-        await _cleanup_agent(agent_id)
-
 
 async def _background_delegate_task(
     agent_id: str,
@@ -476,7 +465,8 @@ async def _retrigger_caller(caller_agent_id: str, caller_session_id: str,
                 f"has completed its task. Here is the result:]\n\n"
                 f"{task_response}\n\n"
                 f"[Please review the result above and relay the key findings "
-                f"to the user. Summarize if the result is long.]"
+                f"to the user. Do NOT spawn another agent for this — "
+                f"just summarize the result and respond directly.]"
             ),
             "session_id": caller_session_id,
             "source": "agent",
@@ -504,19 +494,6 @@ async def _try_push_telegram(agent_id: str, message: str):
                         f"https://api.telegram.org/bot{bot_token}/sendMessage",
                         json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"},
                     )
-    except Exception:
-        pass
-
-
-async def _cleanup_agent(agent_id: str):
-    """Stop and delete an ephemeral agent pod + DB record."""
-    try:
-        await _api_post(f"/api/agents/{agent_id}/stop")
-    except Exception:
-        pass
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.delete(f"{API_BASE}/api/agents/{agent_id}")
     except Exception:
         pass
 
@@ -626,12 +603,17 @@ async def delete_cron_job(cron_id: str, **kwargs) -> str:
         return f"Error deleting cron job: {e}"
 
 
-async def analyze_camera(camera_id: str, mode: str = "snapshot", duration: int = 3, **kwargs) -> str:
-    """Capture frame(s) from a camera and analyze with vision AI.
+async def analyze_camera(camera_id: str, mode: str = "snapshot", duration: int = 5, **kwargs) -> str:
+    """Capture frame(s) from a camera's MJPEG stream and analyze with vision AI.
+
+    Uses pure-Python MJPEG parsing (no ffmpeg dependency). In 'clip' mode,
+    captures one frame per second over ``duration`` seconds.
 
     The ``_agent_context`` kwarg is injected by the chat route so we
     can use the calling agent's own LLM credentials for the vision call.
     """
+    import time as _time
+
     agent_ctx = kwargs.get("_agent_context", {})
 
     # 1. Resolve stream URL
@@ -640,97 +622,100 @@ async def analyze_camera(camera_id: str, mode: str = "snapshot", duration: int =
         if cam.get("status") != "running":
             return f"Camera '{cam.get('name', camera_id)}' is not running (status: {cam.get('status')})"
 
-        # Build the internal stream URL (same logic as recorder)
         svc_name = cam.get("service_name")
         if not svc_name:
             return "Camera has no service — cannot capture."
         stream_url = f"http://{svc_name}.{settings.k8s_namespace}.svc.cluster.local:8081/"
-
-        # For RTSP cameras, prefer the source_url for ffmpeg (better quality)
-        if cam.get("protocol") in ("rtsp", "onvif") and cam.get("source_url"):
-            stream_url = cam["source_url"]
     except Exception as e:
         return f"Error resolving camera stream: {e}"
 
-    # 2. Capture with ffmpeg
-    tmp_dir = tempfile.mkdtemp(prefix="fe-analyze-")
-    image_paths: list[str] = []
+    cam_name = cam.get("name", camera_id)
 
+    # 2. Capture frames from MJPEG stream (no ffmpeg needed)
     try:
         if mode == "clip":
-            duration = max(3, min(5, duration))
-            # Capture a short clip then extract frames
-            clip_path = os.path.join(tmp_dir, "clip.mp4")
-            proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y",
-                "-i", stream_url,
-                "-t", str(duration),
-                "-an",  # no audio
-                "-vf", f"fps=1",  # 1 frame per second → 3-5 frames
-                os.path.join(tmp_dir, "frame_%02d.jpg"),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=duration + 15)
-            if proc.returncode != 0:
-                return f"ffmpeg frame extraction failed: {stderr.decode()[-300:]}"
-            # Gather extracted frames
-            for f in sorted(os.listdir(tmp_dir)):
-                if f.startswith("frame_") and f.endswith(".jpg"):
-                    image_paths.append(os.path.join(tmp_dir, f))
-            if not image_paths:
-                return "ffmpeg produced no frames from the clip."
+            duration = max(3, min(10, duration))
+            frames = await _capture_mjpeg_frames(stream_url, count=duration, interval=1.0)
         else:
-            # Single snapshot
-            out_path = os.path.join(tmp_dir, "snapshot.jpg")
-            proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y",
-                "-i", stream_url,
-                "-frames:v", "1",
-                "-q:v", "2",
-                out_path,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
-            if proc.returncode != 0:
-                return f"ffmpeg snapshot failed: {stderr.decode()[-300:]}"
-            if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-                return "ffmpeg produced an empty snapshot."
-            image_paths.append(out_path)
+            frames = await _capture_mjpeg_frames(stream_url, count=1, interval=0)
 
-        # 3. Encode images to base64
-        b64_images: list[str] = []
-        for p in image_paths:
-            with open(p, "rb") as fh:
-                b64_images.append(base64.b64encode(fh.read()).decode())
+        if not frames:
+            return "Could not capture any frames from the camera stream."
+    except httpx.TimeoutException:
+        return f"Camera stream timed out. Ensure camera '{cam_name}' is running."
+    except Exception as e:
+        return f"Error capturing frames: {e}"
 
-        # 4. Send to vision LLM
-        provider = agent_ctx.get("provider", "openai")
-        model = agent_ctx.get("model", "gpt-4o")
-        api_key = agent_ctx.get("api_key") or os.getenv("ANTHROPIC_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
-        cam_name = cam.get("name", camera_id)
-        vision_prompt = (
-            f"This is a live feed from security camera '{cam_name}'. "
-            "Describe what you see. Note any people, activity, objects, or anything unusual."
-        )
+    # 3. Encode to base64
+    b64_images = [base64.b64encode(f).decode() for f in frames]
 
+    # 4. Send to vision LLM
+    provider = agent_ctx.get("provider", "openai")
+    model = agent_ctx.get("model", "gpt-4o")
+    api_key = (
+        agent_ctx.get("api_key")
+        or os.getenv("ANTHROPIC_API_KEY", "")
+        or os.getenv("OPENAI_API_KEY", "")
+    )
+    vision_prompt = (
+        f"These are {len(b64_images)} frame(s) captured over {duration} seconds "
+        f"from security camera '{cam_name}'. "
+        "Describe what you see in detail. Note any people, their actions, "
+        "objects, environment, activity, or anything unusual. "
+        "If multiple frames are provided, note any changes between them."
+    )
+
+    try:
         if provider == "anthropic":
             description = await _vision_anthropic(api_key, model, b64_images, vision_prompt)
         else:
-            base_url = "https://api.openai.com/v1" if provider == "openai" else "http://ollama:11434/v1"
+            base_url = (
+                "https://api.openai.com/v1" if provider == "openai"
+                else "http://ollama:11434/v1"
+            )
             description = await _vision_openai(api_key, model, base_url, b64_images, vision_prompt)
-
-        return f"[Camera: {cam_name} | Mode: {mode}]\n{description}"
-
-    except asyncio.TimeoutError:
-        return "ffmpeg timed out while capturing from the camera stream."
     except Exception as e:
-        return f"Error during camera analysis: {e}"
-    finally:
-        # Cleanup temp files
-        import shutil
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return f"Vision API call failed: {e}"
+
+    return f"[Camera: {cam_name} | Frames: {len(b64_images)} | Duration: {duration}s]\n{description}"
+
+
+async def _capture_mjpeg_frames(stream_url: str, count: int = 1,
+                                interval: float = 1.0) -> list[bytes]:
+    """Extract JPEG frames from an MJPEG stream without ffmpeg.
+
+    Reads the stream, extracts ``count`` frames spaced ``interval`` seconds apart.
+    Returns a list of raw JPEG byte buffers.
+    """
+    import time as _time
+
+    frames: list[bytes] = []
+    timeout = max(15, count * interval + 10)
+    last_capture = 0.0
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("GET", stream_url) as resp:
+            buf = b""
+            async for chunk in resp.aiter_bytes(chunk_size=16384):
+                buf += chunk
+                while True:
+                    start = buf.find(b"\xff\xd8")
+                    if start == -1:
+                        buf = buf[-2:] if len(buf) > 2 else buf
+                        break
+                    end = buf.find(b"\xff\xd9", start + 2)
+                    if end == -1:
+                        break
+                    frame = buf[start : end + 2]
+                    buf = buf[end + 2 :]
+
+                    now = _time.monotonic()
+                    if now - last_capture >= interval or not frames:
+                        frames.append(frame)
+                        last_capture = now
+                        if len(frames) >= count:
+                            return frames
+    return frames
 
 
 async def _vision_openai(api_key: str, model: str, base_url: str, b64_images: list[str], prompt: str) -> str:

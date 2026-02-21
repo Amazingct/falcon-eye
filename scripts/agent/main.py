@@ -38,6 +38,11 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "You are a Falcon-Eye AI agent.")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
+# Task mode env vars — set when running as a K8s Job for a one-off task
+AGENT_TASK = os.getenv("AGENT_TASK", "")
+CALLER_AGENT_ID = os.getenv("CALLER_AGENT_ID", "")
+CALLER_SESSION_ID = os.getenv("CALLER_SESSION_ID", "")
+
 MAX_RECURSION = 25
 
 
@@ -490,5 +495,104 @@ async def webhook_handler(request: Request):
     return {"response": result.get("response", ""), "session_id": session_id, "media": result.get("media", [])}
 
 
+# ─── Task Mode (K8s Job — run once, callback, exit) ─────────
+
+async def run_task_mode():
+    """Execute a single task from AGENT_TASK env var, post result to callback, then exit."""
+    logger.info("Task mode: agent=%s task_length=%d", AGENT_ID, len(AGENT_TASK))
+
+    # Wait for API to become reachable
+    for attempt in range(30):
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                res = await client.get(f"{API_URL}/health")
+                if res.status_code == 200:
+                    break
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+    else:
+        logger.error("API unreachable after 60s, aborting task")
+        await _post_task_complete("(Agent could not reach the API)")
+        return
+
+    # Fetch chat config (tools, system prompt, api key)
+    config = None
+    for attempt in range(10):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                res = await client.get(f"{API_URL}/api/agents/{AGENT_ID}/chat-config")
+                if res.status_code == 200:
+                    config = res.json()
+                    break
+        except Exception:
+            pass
+        await asyncio.sleep(3)
+
+    if not config:
+        logger.error("Failed to fetch chat config")
+        await _post_task_complete("(Failed to fetch agent configuration)")
+        return
+
+    tools_schema = config.get("tools_schema", [])
+    system_prompt = config.get("system_prompt", SYSTEM_PROMPT)
+
+    if tools_schema:
+        tool_lines = [
+            f"- **{t['function']['name']}**: {t['function']['description']}"
+            for t in tools_schema
+        ]
+        system_prompt += (
+            "\n\n## Available Tools\n"
+            "You MUST use the appropriate tool when the user's request matches one. "
+            "Do not describe what you would do — actually call the tool.\n\n"
+            + "\n".join(tool_lines)
+        )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": AGENT_TASK},
+    ]
+
+    agent_config = {
+        "provider": config.get("provider", LLM_PROVIDER),
+        "model": config.get("model", LLM_MODEL),
+        "api_key": config.get("api_key", LLM_API_KEY),
+        "max_tokens": config.get("max_tokens", 4096),
+        "temperature": config.get("temperature", 0.7),
+        "agent_id": AGENT_ID,
+    }
+
+    try:
+        response_text, _, _, _ = await run_chat(
+            messages=messages, tools_schema=tools_schema, agent_config=agent_config,
+        )
+    except Exception as e:
+        logger.error("Task execution failed: %s", e)
+        response_text = f"(Task execution failed: {e})"
+
+    await _post_task_complete(response_text)
+    logger.info("Task mode complete, exiting.")
+
+
+async def _post_task_complete(result: str):
+    """Post task result back to the API's task-complete callback endpoint."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.post(
+                f"{API_URL}/api/agents/{AGENT_ID}/task-complete",
+                json={
+                    "result": result,
+                    "caller_agent_id": CALLER_AGENT_ID,
+                    "caller_session_id": CALLER_SESSION_ID,
+                },
+            )
+    except Exception as e:
+        logger.error("Failed to post task completion: %s", e)
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    if AGENT_TASK:
+        asyncio.run(run_task_mode())
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=8080)

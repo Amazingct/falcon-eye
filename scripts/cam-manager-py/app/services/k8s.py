@@ -698,6 +698,123 @@ async def delete_agent_deployment(deployment_name: str, service_name: str = None
                 logger.error(f"Error deleting agent service: {e.reason}")
 
 
+async def create_agent_job(agent, task: str,
+                           caller_agent_id: str = None,
+                           caller_session_id: str = None) -> dict:
+    """Create a K8s Job for an ephemeral agent task (run-to-completion, no restart)."""
+    import re
+    name_slug = re.sub(r"[^a-z0-9-]", "-", agent.slug.lower()).strip("-")[:30]
+    short_id = str(agent.id)[:8]
+    job_name = f"agent-task-{name_slug}-{short_id}"
+
+    resolved_key = agent.api_key_ref or ""
+    if not resolved_key:
+        if agent.provider == "anthropic":
+            resolved_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        elif agent.provider == "openai":
+            resolved_key = os.environ.get("OPENAI_API_KEY", "")
+
+    env_vars = [
+        {"name": "AGENT_ID", "value": str(agent.id)},
+        {"name": "AGENT_TASK", "value": task},
+        {"name": "CALLER_AGENT_ID", "value": caller_agent_id or ""},
+        {"name": "CALLER_SESSION_ID", "value": caller_session_id or ""},
+        {"name": "API_URL", "value": f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"},
+        {"name": "LLM_PROVIDER", "value": agent.provider},
+        {"name": "LLM_MODEL", "value": agent.model},
+        {"name": "LLM_API_KEY", "value": resolved_key},
+        {"name": "LLM_BASE_URL", "value": ""},
+        {"name": "SYSTEM_PROMPT", "value": agent.system_prompt or ""},
+    ]
+
+    job = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": job_name,
+            "namespace": settings.k8s_namespace,
+            "labels": {
+                "app": "falcon-eye",
+                "component": "agent-task",
+                "agent-id": str(agent.id),
+            },
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "activeDeadlineSeconds": 600,
+            "ttlSecondsAfterFinished": 300,
+            "template": {
+                "metadata": {
+                    "labels": {
+                        "app": "falcon-eye",
+                        "component": "agent-task",
+                        "agent-id": str(agent.id),
+                    },
+                },
+                "spec": {
+                    "restartPolicy": "Never",
+                    "containers": [{
+                        "name": "agent",
+                        "image": "ghcr.io/amazingct/falcon-eye-agent:latest",
+                        "imagePullPolicy": os.environ.get("IMAGE_PULL_POLICY", "Always"),
+                        "envFrom": [{"configMapRef": {"name": "falcon-eye-config"}}],
+                        "env": env_vars,
+                        "resources": {
+                            "requests": {"memory": "64Mi", "cpu": "50m"},
+                            "limits": {
+                                "memory": agent.memory_limit or "512Mi",
+                                "cpu": agent.cpu_limit or "500m",
+                            },
+                        },
+                    }],
+                },
+            },
+        },
+    }
+
+    if agent.node_name:
+        job["spec"]["template"]["spec"]["nodeSelector"] = {
+            "kubernetes.io/hostname": agent.node_name,
+        }
+        tolerations = settings.get_node_tolerations(agent.node_name)
+        if tolerations:
+            job["spec"]["template"]["spec"]["tolerations"] = tolerations
+
+    try:
+        batch_api.create_namespaced_job(namespace=settings.k8s_namespace, body=job)
+        logger.info(f"Created agent task job: {job_name}")
+        return {"job_name": job_name}
+    except ApiException as e:
+        if e.status == 409:
+            try:
+                batch_api.delete_namespaced_job(
+                    name=job_name, namespace=settings.k8s_namespace,
+                    propagation_policy="Background",
+                )
+            except Exception:
+                pass
+            import asyncio
+            await asyncio.sleep(3)
+            batch_api.create_namespaced_job(namespace=settings.k8s_namespace, body=job)
+            logger.info(f"Re-created agent task job: {job_name}")
+            return {"job_name": job_name}
+        logger.error(f"K8s API error creating agent job: {e.reason}")
+        raise Exception(f"Kubernetes error: {e.reason}")
+
+
+async def delete_agent_job(job_name: str):
+    """Delete an agent task Job and its pods."""
+    try:
+        batch_api.delete_namespaced_job(
+            name=job_name, namespace=settings.k8s_namespace,
+            propagation_policy="Background",
+        )
+        logger.info(f"Deleted agent job: {job_name}")
+    except ApiException as e:
+        if e.status != 404:
+            logger.error(f"Error deleting agent job: {e.reason}")
+
+
 async def create_k8s_cronjob(cron_job, agent) -> str:
     """Create K8s CronJob resource"""
     import re
