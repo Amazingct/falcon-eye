@@ -5,6 +5,7 @@ import CronJobsPage from './components/CronJobsPage'
 import AgentChat from './components/AgentChat'
 import AgentDetailPage from './components/AgentDetailPage'
 import CronExpressionBuilder from './components/CronExpressionBuilder'
+import ChatMarkdown from './components/ChatMarkdown'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -2173,7 +2174,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
                 {msg.thinking ? (
                   <div className="flex items-center space-x-2 text-sm text-gray-400"><Loader2 className="h-4 w-4 animate-spin" /><span>Getting info...</span></div>
                 ) : msg.content ? (
-                  <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                  <ChatMarkdown content={msg.content} isUser={msg.role === 'user'} />
                 ) : msg.role === 'assistant' && isLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : null}
