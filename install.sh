@@ -1171,6 +1171,15 @@ restart_all_on_upgrade() {
         done
     fi
 
+    # Agent deployments
+    AGENT_DEPLOYS=$(kubectl get deployments -n ${NAMESPACE} -l component=agent --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
+    if [ -n "$AGENT_DEPLOYS" ]; then
+        for dep in $AGENT_DEPLOYS; do
+            kubectl rollout restart deployment/"$dep" -n ${NAMESPACE} 2>/dev/null || true
+            echo -e "  ${CYAN}↻${NC} ${dep}"
+        done
+    fi
+
     echo -e "${GREEN}✓ All components restarting with latest images${NC}"
 }
 
@@ -1182,8 +1191,8 @@ wait_for_rollout() {
     kubectl rollout status deployment/falcon-eye-api -n ${NAMESPACE} --timeout=120s 2>/dev/null || true
     kubectl rollout status deployment/falcon-eye-dashboard -n ${NAMESPACE} --timeout=120s 2>/dev/null || true
 
-    # Wait for any camera/recorder deployments too
-    for dep in $(kubectl get deployments -n ${NAMESPACE} -l 'component in (camera,recorder)' --no-headers -o custom-columns=":metadata.name" 2>/dev/null); do
+    # Wait for any camera/recorder/agent deployments too
+    for dep in $(kubectl get deployments -n ${NAMESPACE} -l 'component in (camera,recorder,agent)' --no-headers -o custom-columns=":metadata.name" 2>/dev/null); do
         kubectl rollout status deployment/"$dep" -n ${NAMESPACE} --timeout=120s 2>/dev/null || true
     done
     
