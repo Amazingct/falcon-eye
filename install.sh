@@ -590,8 +590,8 @@ configure_options() {
         ANTHROPIC_API_KEY="${EXISTING_ANTHROPIC_KEY:-}"
         OPENAI_API_KEY="${EXISTING_OPENAI_KEY:-}"
         echo -e "${GREEN}  Auto-configured: Kubernetes scheduler will place all components${NC}"
-        [ -n "$ANTHROPIC_API_KEY" ] && echo -e "${GREEN}  ✓ Anthropic API key preserved from existing config${NC}"
-        [ -n "$OPENAI_API_KEY" ] && echo -e "${GREEN}  ✓ OpenAI API key preserved from existing config${NC}"
+        [ -n "$ANTHROPIC_API_KEY" ] && echo -e "${GREEN}  ✓ Anthropic API key preserved from existing config${NC}" || true
+        [ -n "$OPENAI_API_KEY" ] && echo -e "${GREEN}  ✓ OpenAI API key preserved from existing config${NC}" || true
         return
     fi
     
