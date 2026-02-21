@@ -1,4 +1,5 @@
 """Kubernetes deployment management service"""
+import os
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from typing import Optional
@@ -556,19 +557,24 @@ async def create_agent_deployment(agent) -> dict:
     deployment_name = f"agent-{name_slug}"
     service_name = f"svc-agent-{name_slug}"
 
+    # Resolve the LLM API key: per-agent override, or shared key from ConfigMap env
+    resolved_key = agent.api_key_ref or ""
+    if not resolved_key:
+        if agent.provider == "anthropic":
+            resolved_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        elif agent.provider == "openai":
+            resolved_key = os.environ.get("OPENAI_API_KEY", "")
+
     env_vars = [
         {"name": "AGENT_ID", "value": str(agent.id)},
         {"name": "API_URL", "value": f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"},
         {"name": "CHANNEL_TYPE", "value": agent.channel_type or ""},
         {"name": "LLM_PROVIDER", "value": agent.provider},
         {"name": "LLM_MODEL", "value": agent.model},
+        {"name": "LLM_API_KEY", "value": resolved_key},
         {"name": "LLM_BASE_URL", "value": ""},
         {"name": "SYSTEM_PROMPT", "value": agent.system_prompt or ""},
     ]
-
-    # Only set per-agent LLM_API_KEY if the agent has its own override
-    if agent.api_key_ref:
-        env_vars.append({"name": "LLM_API_KEY", "value": agent.api_key_ref})
 
     # Add channel-specific env vars
     channel_config = agent.channel_config or {}
@@ -604,8 +610,8 @@ async def create_agent_deployment(agent) -> dict:
                     "containers": [{
                         "name": "agent",
                         "image": "ghcr.io/amazingct/falcon-eye-agent:latest",
-                        "imagePullPolicy": "IfNotPresent",
-                        "ports": [{"containerPort": 8080, "name": "health"}],
+                        "imagePullPolicy": os.environ.get("IMAGE_PULL_POLICY", "Always"),
+                        "ports": [{"containerPort": 8080, "name": "http"}],
                         "envFrom": [{"configMapRef": {"name": "falcon-eye-config"}}],
                         "env": env_vars,
                         "resources": {
@@ -645,7 +651,7 @@ async def create_agent_deployment(agent) -> dict:
         "spec": {
             "type": "ClusterIP",
             "selector": {"agent-id": str(agent.id)},
-            "ports": [{"port": 8080, "targetPort": 8080, "name": "health"}],
+            "ports": [{"port": 8080, "targetPort": 8080, "name": "http"}],
         },
     }
 

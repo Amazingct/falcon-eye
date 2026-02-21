@@ -1,24 +1,26 @@
-"""Agent chat API routes"""
+"""Agent chat API routes — proxies LLM calls to agent pods"""
 import asyncio
-import json
+import os
 import uuid
+import logging
 from collections import defaultdict
 from typing import Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, distinct
+from sqlalchemy import select, func
 from pydantic import BaseModel
+import httpx
 
 from app.database import get_db
 from app.models.agent import Agent, AgentChatMessage
-from app.tools.registry import TOOLS_REGISTRY, get_tools_for_agent
-from app.tools.handlers import execute_tool
+from app.tools.registry import get_tools_for_agent
+from app.config import get_settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["agent-chat"])
+settings = get_settings()
 
-# Per-session locks: ensures messages within a session are processed one at a
-# time so the AI always sees its own previous response before handling the next.
 _session_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
@@ -33,6 +35,16 @@ class SendResponse(BaseModel):
     response: str
     session_id: str
     timestamp: str
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+
+
+class SaveMessageRequest(BaseModel):
+    session_id: str
+    role: str
+    content: str
+    source: str = "agent"
+    source_user: Optional[str] = None
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
 
@@ -62,22 +74,23 @@ async def send_message(
     data: SendMessage,
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a message to an agent and get LLM response.
-
-    Uses a per-session lock so messages are processed sequentially — the AI
-    always finishes responding before the next message is handled.
-    """
-    # Get agent
+    """Send a message to an agent. Stores the user message, proxies to the
+    agent pod for LLM processing, stores the response, and returns it."""
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    if not agent.service_name:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent pod is not deployed. Please start the agent first.",
+        )
+
     session_id = data.session_id or str(uuid.uuid4())
     lock_key = f"{agent_id}:{session_id}"
 
     async with _session_locks[lock_key]:
-        # Store user message
         user_msg = AgentChatMessage(
             agent_id=agent_id,
             session_id=session_id,
@@ -89,20 +102,15 @@ async def send_message(
         db.add(user_msg)
         await db.flush()
 
-        # Get tools for this agent
         agent_tools = agent.tools or []
         tools_schema = get_tools_for_agent(agent_tools) if agent_tools else []
 
-        # Build messages for LLM
+        # Build messages for the agent pod
         llm_messages = []
 
-        # System prompt — augment with tool awareness so the LLM reliably uses its tools
         system_prompt = agent.system_prompt or "You are a helpful AI assistant."
         if tools_schema:
-            tool_lines = []
-            for t in tools_schema:
-                fn = t["function"]
-                tool_lines.append(f"- **{fn['name']}**: {fn['description']}")
+            tool_lines = [f"- **{t['function']['name']}**: {t['function']['description']}" for t in tools_schema]
             system_prompt += (
                 "\n\n## Available Tools\n"
                 "You MUST use the appropriate tool when the user's request matches one. "
@@ -111,22 +119,15 @@ async def send_message(
             )
         llm_messages.append({"role": "system", "content": system_prompt})
 
-        # For pod agents, load history; for main agent, stateless
-        if agent.slug != "main":
-            history_result = await db.execute(
-                select(AgentChatMessage)
-                .where(AgentChatMessage.agent_id == agent_id, AgentChatMessage.session_id == session_id)
-                .order_by(AgentChatMessage.created_at.asc())
-            )
-            history = history_result.scalars().all()
-            for msg in history:
-                llm_messages.append({"role": msg.role, "content": msg.content})
-        else:
-            # Stateless - just the current message
-            llm_messages.append({"role": "user", "content": data.message})
+        history_result = await db.execute(
+            select(AgentChatMessage)
+            .where(AgentChatMessage.agent_id == agent_id, AgentChatMessage.session_id == session_id)
+            .order_by(AgentChatMessage.created_at.asc())
+        )
+        history = history_result.scalars().all()
+        for msg in history:
+            llm_messages.append({"role": msg.role, "content": msg.content})
 
-        # Build agent context for tool handlers that need LLM creds (e.g. camera_analyze)
-        import os
         resolved_key = agent.api_key_ref or ""
         if not resolved_key:
             if agent.provider == "anthropic":
@@ -134,26 +135,43 @@ async def send_message(
             elif agent.provider == "openai":
                 resolved_key = os.getenv("OPENAI_API_KEY", "")
 
-        agent_context = {
+        agent_config = {
             "provider": agent.provider,
             "model": agent.model,
             "api_key": resolved_key,
-            "pending_media": [],
+            "max_tokens": agent.max_tokens,
+            "temperature": agent.temperature,
         }
 
-        # Call LLM
+        # Proxy to agent pod
+        agent_url = f"http://{agent.service_name}.{settings.k8s_namespace}.svc.cluster.local:8080"
         try:
-            response_text, prompt_tokens, completion_tokens = await _call_llm(
-                agent, llm_messages, tools_schema, agent_context=agent_context
+            async with httpx.AsyncClient(timeout=180) as client:
+                res = await client.post(
+                    f"{agent_url}/chat/send",
+                    json={
+                        "messages": llm_messages,
+                        "tools": tools_schema,
+                        "agent_config": agent_config,
+                    },
+                )
+                if res.status_code != 200:
+                    raise Exception(f"Agent pod returned {res.status_code}: {res.text[:300]}")
+                pod_response = res.json()
+        except httpx.ConnectError:
+            raise HTTPException(
+                status_code=503,
+                detail="Cannot reach agent pod. It may still be starting up. Please try again in a moment.",
             )
         except Exception as e:
-            response_text = f"Error: {str(e)}"
-            prompt_tokens = None
-            completion_tokens = None
+            logger.error(f"Error proxying to agent pod: {e}")
+            pod_response = {"response": f"Error communicating with agent pod: {e}"}
 
-        pending_media = agent_context.get("pending_media", [])
+        response_text = pod_response.get("response", "")
+        prompt_tokens = pod_response.get("prompt_tokens")
+        completion_tokens = pod_response.get("completion_tokens")
+        pending_media = pod_response.get("media", [])
 
-        # Store assistant response
         assistant_msg = AgentChatMessage(
             agent_id=agent_id,
             session_id=session_id,
@@ -166,7 +184,6 @@ async def send_message(
         db.add(assistant_msg)
         await db.commit()
 
-    # Clean up locks for sessions that are no longer active
     if not _session_locks[lock_key].locked():
         _session_locks.pop(lock_key, None)
 
@@ -180,6 +197,34 @@ async def send_message(
     if pending_media:
         resp["media"] = pending_media
     return resp
+
+
+@router.post("/{agent_id}/messages/save")
+async def save_message_endpoint(
+    agent_id: UUID,
+    data: SaveMessageRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save a message directly. Used by agent pods handling Telegram/webhook
+    messages to persist chat history without going through the send flow."""
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    msg = AgentChatMessage(
+        agent_id=agent_id,
+        session_id=data.session_id,
+        role=data.role,
+        content=data.content,
+        source=data.source,
+        source_user=data.source_user,
+        prompt_tokens=data.prompt_tokens,
+        completion_tokens=data.completion_tokens,
+    )
+    db.add(msg)
+    await db.commit()
+    return {"status": "saved"}
 
 
 @router.get("/{agent_id}/sessions")
@@ -210,175 +255,9 @@ async def list_sessions(agent_id: UUID, db: AsyncSession = Depends(get_db)):
 @router.post("/{agent_id}/sessions/new")
 async def create_session(agent_id: UUID, db: AsyncSession = Depends(get_db)):
     """Create a new chat session"""
-    # Verify agent exists
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Agent not found")
 
     session_id = str(uuid.uuid4())
     return {"session_id": session_id}
-
-
-async def _call_llm(agent: Agent, messages: list[dict], tools: list[dict], max_iterations: int = 5, agent_context: dict = None) -> tuple[str, int, int]:
-    """Call the LLM provider with tool support.
-
-    Key resolution order:
-    1. Per-agent key from DB (agent.api_key_ref)
-    2. Shared key from ConfigMap env (ANTHROPIC_API_KEY / OPENAI_API_KEY)
-    """
-    import os
-
-    provider = agent.provider
-    model = agent.model
-
-    api_key = agent.api_key_ref or ""
-    if not api_key:
-        if provider == "anthropic":
-            api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        elif provider == "openai":
-            api_key = os.getenv("OPENAI_API_KEY", "")
-
-    if provider == "anthropic":
-        return await _call_anthropic(api_key, model, messages, tools, agent.max_tokens, agent.temperature, max_iterations, agent_context=agent_context)
-    elif provider in ("openai", "ollama"):
-        base_url = "https://api.openai.com/v1" if provider == "openai" else "http://ollama:11434/v1"
-        return await _call_openai_compatible(api_key, model, base_url, messages, tools, agent.max_tokens, agent.temperature, max_iterations, agent_context=agent_context)
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
-
-
-async def _call_openai_compatible(api_key: str, model: str, base_url: str, messages: list, tools: list, max_tokens: int, temperature: float, max_iterations: int, agent_context: dict = None) -> tuple[str, int, int]:
-    import httpx
-
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    total_prompt = 0
-    total_completion = 0
-
-    for _ in range(max_iterations):
-        payload = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        if tools:
-            payload["tools"] = tools
-
-        async with httpx.AsyncClient(timeout=120) as client:
-            res = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
-            if res.status_code != 200:
-                raise Exception(f"LLM API error ({res.status_code}): {res.text[:500]}")
-            data = res.json()
-
-        choice = data["choices"][0]
-        usage = data.get("usage", {})
-        total_prompt += usage.get("prompt_tokens", 0)
-        total_completion += usage.get("completion_tokens", 0)
-
-        msg = choice["message"]
-
-        if msg.get("tool_calls"):
-            messages.append(msg)
-            for tc in msg["tool_calls"]:
-                fn_name = tc["function"]["name"]
-                try:
-                    fn_args = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    fn_args = {}
-                tool_result = await execute_tool(fn_name, fn_args, agent_context=agent_context)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_result,
-                })
-            continue
-
-        return msg.get("content", ""), total_prompt, total_completion
-
-    return "Max tool iterations reached.", total_prompt, total_completion
-
-
-async def _call_anthropic(api_key: str, model: str, messages: list, tools: list, max_tokens: int, temperature: float, max_iterations: int, agent_context: dict = None) -> tuple[str, int, int]:
-    import httpx
-
-    if not api_key:
-        raise Exception("Anthropic API key not configured. Set it in the shared ConfigMap (ANTHROPIC_API_KEY) or per-agent in the dashboard.")
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-    }
-
-    # Convert OpenAI format to Anthropic format
-    system_prompt = None
-    anthropic_messages = []
-    for m in messages:
-        if m["role"] == "system":
-            system_prompt = m["content"]
-        else:
-            anthropic_messages.append({"role": m["role"], "content": m["content"]})
-
-    # Convert tools to Anthropic format
-    anthropic_tools = []
-    for t in tools:
-        fn = t["function"]
-        anthropic_tools.append({
-            "name": fn["name"],
-            "description": fn["description"],
-            "input_schema": fn["parameters"],
-        })
-
-    total_prompt = 0
-    total_completion = 0
-
-    for _ in range(max_iterations):
-        payload = {
-            "model": model,
-            "messages": anthropic_messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        if system_prompt:
-            payload["system"] = system_prompt
-        if anthropic_tools:
-            payload["tools"] = anthropic_tools
-
-        async with httpx.AsyncClient(timeout=120) as client:
-            res = await client.post("https://api.anthropic.com/v1/messages", json=payload, headers=headers)
-            if res.status_code != 200:
-                raise Exception(f"Anthropic API error ({res.status_code}): {res.text[:500]}")
-            data = res.json()
-
-        usage = data.get("usage", {})
-        total_prompt += usage.get("input_tokens", 0)
-        total_completion += usage.get("output_tokens", 0)
-
-        # Check for tool use
-        tool_use_blocks = [b for b in data.get("content", []) if b["type"] == "tool_use"]
-        text_blocks = [b for b in data.get("content", []) if b["type"] == "text"]
-
-        if tool_use_blocks and data.get("stop_reason") == "tool_use":
-            # Add assistant message with tool use
-            anthropic_messages.append({"role": "assistant", "content": data["content"]})
-
-            # Execute tools and add results
-            tool_results = []
-            for tu in tool_use_blocks:
-                result_text = await execute_tool(tu["name"], tu.get("input", {}), agent_context=agent_context)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tu["id"],
-                    "content": result_text,
-                })
-            anthropic_messages.append({"role": "user", "content": tool_results})
-            continue
-
-        # Extract text response
-        response_text = " ".join(b["text"] for b in text_blocks) if text_blocks else ""
-        return response_text, total_prompt, total_completion
-
-    return "Max tool iterations reached.", total_prompt, total_completion

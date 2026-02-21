@@ -243,14 +243,16 @@ async def ensure_main_agent(db: AsyncSession):
         await db.commit()
         await db.refresh(agent)
 
-    # Auto-deploy if not running
-    if agent.status != "running":
+    # Auto-deploy if not running or deployment is missing
+    needs_deploy = agent.status != "running" or not agent.deployment_name
+    if needs_deploy:
         try:
             k8s_result = await k8s.create_agent_deployment(agent)
             agent.deployment_name = k8s_result["deployment_name"]
             agent.service_name = k8s_result["service_name"]
             agent.status = "running"
             await db.commit()
+            print(f"Main agent deployed: {agent.deployment_name}")
         except Exception as e:
             print(f"Warning: Failed to auto-deploy main agent: {e}")
             agent.status = "error"
