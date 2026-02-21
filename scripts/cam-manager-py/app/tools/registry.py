@@ -40,7 +40,7 @@ TOOLS_REGISTRY = {
     },
     "camera_snapshot": {
         "name": "camera_snapshot",
-        "description": "Grab a frame/snapshot from a camera",
+        "description": "Grab a snapshot frame from a running camera and save it to the filesystem. Returns the saved file path. Use send_media afterwards to deliver the snapshot to the user.",
         "category": "cameras",
         "parameters": {
             "type": "object",
@@ -150,7 +150,7 @@ TOOLS_REGISTRY = {
     },
     "agent_spawn": {
         "name": "spawn_agent",
-        "description": "Create and start a new agent. Automatically inherits the calling agent's LLM config (provider, model, API key). Only name is required.",
+        "description": "Create and start a new agent pod. Inherits calling agent's LLM config. If 'task' is provided, the agent executes it asynchronously in the background — this tool returns immediately so you can continue working. The result will be delivered to your session as a system message once the spawned agent finishes, and the ephemeral agent pod is automatically cleaned up.",
         "category": "agents",
         "parameters": {
             "type": "object",
@@ -159,10 +159,25 @@ TOOLS_REGISTRY = {
                 "system_prompt": {"type": "string", "description": "System prompt (optional — defaults to generic)"},
                 "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool IDs to enable (optional — inherits parent's tools)"},
                 "channel_type": {"type": "string", "enum": ["telegram", "webhook", "custom"], "description": "Channel type (optional — inherits parent's)"},
+                "task": {"type": "string", "description": "A task for the agent to execute in the background. The result is delivered asynchronously as a system message."},
             },
             "required": ["name"],
         },
         "handler": "app.tools.handlers.spawn_agent",
+    },
+    "agent_delegate": {
+        "name": "delegate_task",
+        "description": "Send a task to an already-running agent asynchronously. Returns immediately so you can continue working. The result will be delivered to your session as a system message once the target agent finishes.",
+        "category": "agents",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string", "description": "UUID of the target agent (must be running)"},
+                "task": {"type": "string", "description": "The task or question to send to the agent"},
+            },
+            "required": ["agent_id", "task"],
+        },
+        "handler": "app.tools.handlers.delegate_task",
     },
     "agent_create_from": {
         "name": "clone_agent",

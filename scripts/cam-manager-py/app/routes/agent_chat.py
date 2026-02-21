@@ -141,6 +141,8 @@ async def send_message(
             "api_key": resolved_key,
             "max_tokens": agent.max_tokens,
             "temperature": agent.temperature,
+            "agent_id": str(agent_id),
+            "session_id": session_id,
         }
 
         # Proxy to agent pod

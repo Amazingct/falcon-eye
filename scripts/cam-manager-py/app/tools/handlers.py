@@ -2,11 +2,14 @@
 import asyncio
 import base64
 import json
+import logging
 import os
 import re
 import tempfile
 import httpx
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 API_BASE = f"http://localhost:{settings.port}"
@@ -27,10 +30,15 @@ async def _api_post(path: str, data: dict = None) -> dict:
 async def list_cameras(**kwargs) -> str:
     result = await _api_get("/api/cameras/")
     cameras = result.get("cameras", [])
+    if not cameras:
+        return "No cameras found."
     summary = []
     for c in cameras:
-        summary.append(f"- {c['name']} ({c['protocol']}) on {c.get('node_name', 'N/A')} — {c['status']}")
-    return f"Found {len(cameras)} cameras:\n" + "\n".join(summary) if summary else "No cameras found."
+        summary.append(
+            f"- **{c['name']}** (id: `{c['id']}`) — {c['status']} | "
+            f"{c['protocol']} on {c.get('node_name', 'N/A')}"
+        )
+    return f"Found {len(cameras)} cameras:\n" + "\n".join(summary)
 
 
 async def camera_status(camera_id: str, **kwargs) -> str:
@@ -50,7 +58,61 @@ async def control_camera(camera_id: str, action: str, **kwargs) -> str:
 
 
 async def camera_snapshot(camera_id: str, **kwargs) -> str:
-    return f"Snapshot functionality not yet implemented for camera {camera_id}. Use the stream URL to view the camera."
+    """Grab a single JPEG frame from a camera's MJPEG stream and save to filesystem."""
+    import time
+
+    try:
+        camera = await _api_get(f"/api/cameras/{camera_id}")
+    except Exception as e:
+        return f"Error: camera {camera_id} not found ({e})"
+
+    service_name = camera.get("service_name")
+    if not service_name:
+        return f"Camera '{camera.get('name', camera_id)}' is not running. Start it first."
+
+    stream_url = (
+        f"http://{service_name}"
+        f".{settings.k8s_namespace}.svc.cluster.local:8081/"
+    )
+
+    # Grab one JPEG frame from the MJPEG stream
+    try:
+        frame = None
+        async with httpx.AsyncClient(timeout=10) as client:
+            async with client.stream("GET", stream_url) as resp:
+                buf = b""
+                async for chunk in resp.aiter_bytes(chunk_size=8192):
+                    buf += chunk
+                    start = buf.find(b"\xff\xd8")
+                    if start == -1:
+                        continue
+                    end = buf.find(b"\xff\xd9", start)
+                    if end != -1:
+                        frame = buf[start : end + 2]
+                        break
+        if not frame:
+            return "Could not capture a frame from the camera stream."
+    except httpx.TimeoutException:
+        return f"Camera stream timed out. Ensure camera '{camera.get('name', camera_id)}' is running."
+    except Exception as e:
+        return f"Error capturing frame: {e}"
+
+    # Save to shared filesystem via upload endpoint
+    cam_slug = re.sub(r"[^a-z0-9]+", "_", camera.get("name", "cam").lower()).strip("_")
+    filename = f"snapshots/{cam_slug}_{int(time.time())}.jpg"
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{API_BASE}/api/files/upload/{filename}",
+                files={"file": (os.path.basename(filename), frame, "image/jpeg")},
+            )
+            if resp.status_code != 200:
+                return f"Failed to save snapshot: {resp.text[:200]}"
+    except Exception as e:
+        return f"Error saving snapshot: {e}"
+
+    return f"Snapshot saved: {filename} ({len(frame)} bytes). Use send_media to deliver it to the user."
 
 
 async def start_recording(camera_id: str, **kwargs) -> str:
@@ -126,36 +188,121 @@ async def system_info(**kwargs) -> str:
 
 
 async def send_alert(message: str, severity: str = "info", **kwargs) -> str:
-    return f"Alert [{severity.upper()}]: {message} (Alert delivery not yet configured)"
+    """Send an alert: logs to the filesystem and pushes to Telegram agents if any exist."""
+    import time
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    log_line = f"[{timestamp}] [{severity.upper()}] {message}"
+
+    # Append to alerts log on the shared filesystem
+    try:
+        await _api_post("/api/files/write", {
+            "path": "alerts/alerts.log",
+            "content": log_line + "\n",
+            "append": True,
+        })
+    except Exception:
+        pass
+
+    # Try to push to Telegram-connected agents
+    delivered_to = []
+    try:
+        agents_res = await _api_get("/api/agents/")
+        for agent in agents_res.get("agents", []):
+            if agent.get("channel_type") == "telegram" and agent.get("status") == "running":
+                cfg = agent.get("channel_config") or {}
+                bot_token = cfg.get("bot_token")
+                chat_id = cfg.get("chat_id")
+                if bot_token and chat_id:
+                    emoji = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}.get(severity, "📢")
+                    text = f"{emoji} **Falcon-Eye Alert** [{severity.upper()}]\n\n{message}"
+                    try:
+                        async with httpx.AsyncClient(timeout=10) as client:
+                            await client.post(
+                                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                                json={"chat_id": chat_id, "text": text},
+                            )
+                        delivered_to.append(f"Telegram ({agent['name']})")
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    parts = [f"Alert logged: {log_line}"]
+    if delivered_to:
+        parts.append(f"Delivered to: {', '.join(delivered_to)}")
+    else:
+        parts.append("No Telegram channels available for push delivery.")
+    return " | ".join(parts)
 
 
 async def web_search(query: str, **kwargs) -> str:
-    return f"Web search not yet implemented. Query was: {query}"
-
-
-async def spawn_agent(name: str, system_prompt: str = None, tools: list = None, channel_type: str = None, **kwargs) -> str:
-    """Create and start a new agent. Automatically inherits the calling agent's
-    LLM config (provider, model, API key, temperature, max_tokens) so no manual
-    configuration is needed. Only name is required — everything else is optional overrides."""
+    """Search the web using DuckDuckGo and return top results."""
     try:
-        # Get calling agent's config from context (injected by chat route)
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            res = await client.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                headers={"User-Agent": "Mozilla/5.0 (compatible; FalconEye/1.0)"},
+            )
+            if res.status_code != 200:
+                return f"Search request failed ({res.status_code})"
+
+            results = []
+            for match in re.finditer(
+                r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>'
+                r'.*?class="result__snippet"[^>]*>(.*?)</(?:span|div)',
+                res.text,
+                re.DOTALL,
+            ):
+                url, title, snippet = match.groups()
+                title = re.sub(r"<[^>]+>", "", title).strip()
+                snippet = re.sub(r"<[^>]+>", "", snippet).strip()
+                if title and snippet:
+                    results.append(f"- **{title}**\n  {snippet}\n  {url}")
+                if len(results) >= 5:
+                    break
+
+            if results:
+                return f"Search results for '{query}':\n\n" + "\n\n".join(results)
+
+            # Fallback: try DuckDuckGo instant answer API
+            res2 = await client.get(
+                "https://api.duckduckgo.com/",
+                params={"q": query, "format": "json", "no_html": "1"},
+            )
+            data = res2.json()
+            abstract = data.get("AbstractText", "")
+            if abstract:
+                return f"Summary: {abstract}\nSource: {data.get('AbstractSource', '')}"
+
+            return f"No results found for '{query}'."
+    except Exception as e:
+        return f"Search error: {e}"
+
+
+async def spawn_agent(name: str, system_prompt: str = None, tools: list = None,
+                      channel_type: str = None, task: str = None, **kwargs) -> str:
+    """Create and start a new agent. Automatically inherits the calling agent's
+    LLM config. If ``task`` is provided the tool returns immediately and the
+    task is executed asynchronously — the result is posted back to the caller's
+    session as a system message once the spawned agent completes."""
+    try:
         agent_ctx = kwargs.get("_agent_context", {})
         parent_agent_id = agent_ctx.get("agent_id")
-        
-        # Fetch parent agent's full config to inherit from
+        caller_session_id = agent_ctx.get("session_id")
+
         parent_config = {}
         if parent_agent_id:
             try:
                 parent_config = await _api_get(f"/api/agents/{parent_agent_id}")
             except Exception:
                 pass
-        
+
         slug = re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")[:50]
         payload = {
             "name": name,
             "slug": slug,
             "type": "pod",
-            # Inherit from parent agent
             "provider": parent_config.get("provider", agent_ctx.get("provider", "openai")),
             "model": parent_config.get("model", agent_ctx.get("model", "gpt-4o")),
             "api_key_ref": parent_config.get("api_key_ref"),
@@ -163,7 +310,6 @@ async def spawn_agent(name: str, system_prompt: str = None, tools: list = None, 
             "max_tokens": parent_config.get("max_tokens", 4096),
             "cpu_limit": parent_config.get("cpu_limit", "500m"),
             "memory_limit": parent_config.get("memory_limit", "512Mi"),
-            # Overridable fields
             "channel_type": channel_type or parent_config.get("channel_type"),
             "channel_config": parent_config.get("channel_config", {}),
             "system_prompt": system_prompt or f"You are {name}, a Falcon-Eye agent.",
@@ -173,11 +319,221 @@ async def spawn_agent(name: str, system_prompt: str = None, tools: list = None, 
         agent_id = result.get("id")
         if not agent_id:
             return f"Failed to create agent: {json.dumps(result)}"
-        # Start the agent
+
         start_result = await _api_post(f"/api/agents/{agent_id}/start")
-        return f"Agent '{name}' created (id: {agent_id}) and started. Inherited config from parent agent. {start_result.get('message', '')}"
+
+        if not task:
+            return (
+                f"Agent '{name}' created (id: {agent_id}) and started. "
+                f"Inherited config from parent agent. {start_result.get('message', '')}"
+            )
+
+        # Fire-and-forget: task runs in background, result comes back asynchronously
+        asyncio.create_task(
+            _background_spawn_task(
+                agent_id=agent_id,
+                agent_name=name,
+                task=task,
+                caller_agent_id=parent_agent_id,
+                caller_session_id=caller_session_id,
+            )
+        )
+
+        return (
+            f"Agent '{name}' has been spawned (id: {agent_id}) and is executing the task "
+            f"in the background. You will receive the result as a system message once "
+            f"it completes. You can continue with other work in the meantime."
+        )
     except Exception as e:
         return f"Error spawning agent: {e}"
+
+
+async def delegate_task(agent_id: str, task: str, **kwargs) -> str:
+    """Send a task to an already-running agent asynchronously.
+    Returns immediately — the result is posted back to the caller's session
+    as a system message once the target agent completes."""
+    agent_ctx = kwargs.get("_agent_context", {})
+    caller_agent_id = agent_ctx.get("agent_id")
+    caller_session_id = agent_ctx.get("session_id")
+
+    try:
+        agent = await _api_get(f"/api/agents/{agent_id}")
+        agent_name = agent.get("name", agent_id)
+        if agent.get("status") != "running":
+            return (
+                f"Agent '{agent_name}' is not running (status: {agent.get('status')}). "
+                "Start it first or use spawn_agent with a task."
+            )
+
+        asyncio.create_task(
+            _background_delegate_task(
+                agent_id=agent_id,
+                agent_name=agent_name,
+                task=task,
+                caller_agent_id=caller_agent_id,
+                caller_session_id=caller_session_id,
+            )
+        )
+
+        return (
+            f"Task has been delegated to agent '{agent_name}' (id: {agent_id}). "
+            f"It is running in the background. You will receive the result as a "
+            f"system message once it completes. Continue with other work."
+        )
+    except Exception as e:
+        return f"Error delegating task: {e}"
+
+
+# ---------------------------------------------------------------------------
+#  Background task helpers
+# ---------------------------------------------------------------------------
+
+async def _background_spawn_task(
+    agent_id: str,
+    agent_name: str,
+    task: str,
+    caller_agent_id: str | None,
+    caller_session_id: str | None,
+):
+    """Run in background after spawn_agent returns. Waits for the new agent to
+    be reachable, executes the task, posts the result back to the caller's
+    session, re-triggers the caller agent, and cleans up the ephemeral pod."""
+    try:
+        task_response = await _wait_and_send_task(
+            agent_id, task, source_user=caller_agent_id,
+        )
+
+        if caller_agent_id and caller_session_id:
+            await _post_callback(caller_agent_id, caller_session_id, agent_name, task_response)
+            await _retrigger_caller(caller_agent_id, caller_session_id, agent_name)
+    except Exception as exc:
+        logger.error("Background spawn task failed for agent %s: %s", agent_id, exc)
+        if caller_agent_id and caller_session_id:
+            await _post_callback(
+                caller_agent_id, caller_session_id, agent_name,
+                f"(background task failed: {exc})",
+            )
+    finally:
+        await _cleanup_agent(agent_id)
+
+
+async def _background_delegate_task(
+    agent_id: str,
+    agent_name: str,
+    task: str,
+    caller_agent_id: str | None,
+    caller_session_id: str | None,
+):
+    """Run in background after delegate_task returns. Sends the task to the
+    already-running target agent, posts the result back to the caller's
+    session, and re-triggers the caller agent."""
+    try:
+        task_response = await _wait_and_send_task(
+            agent_id, task, source_user=caller_agent_id, retries=1,
+        )
+
+        if caller_agent_id and caller_session_id:
+            await _post_callback(caller_agent_id, caller_session_id, agent_name, task_response)
+            await _retrigger_caller(caller_agent_id, caller_session_id, agent_name)
+    except Exception as exc:
+        logger.error("Background delegate task failed for agent %s: %s", agent_id, exc)
+        if caller_agent_id and caller_session_id:
+            await _post_callback(
+                caller_agent_id, caller_session_id, agent_name,
+                f"(delegated task failed: {exc})",
+            )
+
+
+async def _wait_and_send_task(agent_id: str, task: str,
+                              source_user: str | None = None,
+                              retries: int = 20) -> str:
+    """Poll the agent until it's reachable, then send a task via the chat API."""
+    last_error = ""
+    for attempt in range(retries):
+        try:
+            result = await _api_post(f"/api/chat/{agent_id}/send", {
+                "message": task,
+                "source": "agent",
+                "source_user": source_user,
+            })
+            return result.get("response", "(no response)")
+        except Exception as e:
+            last_error = str(e)
+            if attempt < retries - 1:
+                await asyncio.sleep(3)
+
+    return f"(agent did not respond after {retries} attempts — last error: {last_error})"
+
+
+async def _post_callback(caller_agent_id: str, caller_session_id: str,
+                          agent_name: str, response: str):
+    """Inject the completed-task result into the caller's chat session."""
+    try:
+        await _api_post(f"/api/chat/{caller_agent_id}/messages/save", {
+            "session_id": caller_session_id,
+            "role": "system",
+            "content": (
+                f"[Task result from agent '{agent_name}']\n\n{response}"
+            ),
+            "source": "agent",
+            "source_user": agent_name,
+        })
+    except Exception:
+        pass
+
+
+async def _retrigger_caller(caller_agent_id: str, caller_session_id: str,
+                             agent_name: str):
+    """Re-invoke the caller agent so it processes the newly-added system
+    message from the completed background task."""
+    try:
+        result = await _api_post(f"/api/chat/{caller_agent_id}/send", {
+            "message": (
+                f"[The agent '{agent_name}' you dispatched has completed its task. "
+                f"The full result has been added to your context above. "
+                f"Review it and continue with the user's workflow.]"
+            ),
+            "session_id": caller_session_id,
+            "source": "system",
+        })
+        response_text = result.get("response", "")
+
+        # If the caller is a Telegram agent, push the response to the chat
+        if response_text:
+            await _try_push_telegram(caller_agent_id, response_text)
+    except Exception as exc:
+        logger.warning("Failed to re-trigger caller agent %s: %s", caller_agent_id, exc)
+
+
+async def _try_push_telegram(agent_id: str, message: str):
+    """If the agent has Telegram configured with a chat_id, push the message."""
+    try:
+        agent = await _api_get(f"/api/agents/{agent_id}")
+        if agent.get("channel_type") == "telegram":
+            cfg = agent.get("channel_config") or {}
+            bot_token = cfg.get("bot_token")
+            chat_id = cfg.get("chat_id")
+            if bot_token and chat_id:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"},
+                    )
+    except Exception:
+        pass
+
+
+async def _cleanup_agent(agent_id: str):
+    """Stop and delete an ephemeral agent pod + DB record."""
+    try:
+        await _api_post(f"/api/agents/{agent_id}/stop")
+    except Exception:
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.delete(f"{API_BASE}/api/agents/{agent_id}")
+    except Exception:
+        pass
 
 
 async def clone_agent(source_agent_id: str, new_name: str, override_system_prompt: str = None, override_tools: list = None, **kwargs) -> str:
@@ -506,6 +862,7 @@ HANDLER_MAP = {
     "app.tools.handlers.web_search": web_search,
     "app.tools.handlers.custom_api_call": custom_api_call,
     "app.tools.handlers.spawn_agent": spawn_agent,
+    "app.tools.handlers.delegate_task": delegate_task,
     "app.tools.handlers.clone_agent": clone_agent,
     "app.tools.handlers.analyze_camera": analyze_camera,
     "app.tools.handlers.file_write": file_write,

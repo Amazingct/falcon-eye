@@ -101,7 +101,11 @@ async def run_chat(
 
     llm = get_llm(provider, model_name, api_key, temperature, max_tokens)
 
-    agent_ctx = {"provider": provider, "model": model_name, "api_key": api_key}
+    agent_ctx = {
+        "provider": provider, "model": model_name, "api_key": api_key,
+        "agent_id": agent_config.get("agent_id", AGENT_ID),
+        "session_id": agent_config.get("session_id"),
+    }
     media_collector: list[dict] = []
     tools = build_tools(tools_schema, media_collector, API_URL, agent_ctx)
 
@@ -246,6 +250,7 @@ async def process_message(message_text: str, session_id: str,
         agent_config = {
             "provider": provider, "model": model, "api_key": api_key,
             "max_tokens": max_tokens, "temperature": temperature,
+            "agent_id": AGENT_ID, "session_id": session_id,
         }
 
         response_text, prompt_tokens, completion_tokens, media = await run_chat(

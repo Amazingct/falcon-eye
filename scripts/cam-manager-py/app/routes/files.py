@@ -39,6 +39,7 @@ class FileInfo(BaseModel):
 class WriteRequest(BaseModel):
     content: str
     path: str
+    append: bool = False
 
 
 @router.get("/")
@@ -99,8 +100,12 @@ async def write_text_file(req: WriteRequest):
     """Write text content to a file. Creates parent directories as needed."""
     target = _safe_path(req.path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(req.content, encoding="utf-8")
-    logger.info(f"File written: {req.path} ({len(req.content)} chars)")
+    if req.append:
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(req.content)
+    else:
+        target.write_text(req.content, encoding="utf-8")
+    logger.info(f"File {'appended' if req.append else 'written'}: {req.path} ({len(req.content)} chars)")
     return {
         "path": req.path,
         "size": target.stat().st_size,
