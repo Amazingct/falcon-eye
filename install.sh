@@ -904,12 +904,6 @@ roleRef:
 EOF
     
     echo -e "${GREEN}✓ Falcon-Eye API configured${NC}"
-    
-    # Force pull new image on upgrade
-    if [ "$IS_UPGRADE" = true ]; then
-        echo "  Restarting API to pull latest image..."
-        kubectl rollout restart deployment/falcon-eye-api -n ${NAMESPACE} 2>/dev/null || true
-    fi
 }
 
 # Deploy frontend
@@ -963,12 +957,6 @@ spec:
 EOF
     
     echo -e "${GREEN}✓ Dashboard configured${NC}"
-    
-    # Force pull new image on upgrade
-    if [ "$IS_UPGRADE" = true ]; then
-        echo "  Restarting Dashboard to pull latest image..."
-        kubectl rollout restart deployment/falcon-eye-dashboard -n ${NAMESPACE} 2>/dev/null || true
-    fi
 }
 
 # Deploy file-server DaemonSet (serves recordings from every node)
@@ -1138,6 +1126,47 @@ get_access_host() {
     echo "${IP:-<node-ip>}"
 }
 
+# Restart all deployments/daemonsets to pull latest images on upgrade
+restart_all_on_upgrade() {
+    if [ "$IS_UPGRADE" = false ]; then
+        return
+    fi
+
+    echo ""
+    echo -e "${YELLOW}Restarting all Falcon-Eye components to pull latest images...${NC}"
+
+    # Core deployments
+    kubectl rollout restart deployment/falcon-eye-api -n ${NAMESPACE} 2>/dev/null || true
+    echo -e "  ${CYAN}↻${NC} falcon-eye-api"
+
+    kubectl rollout restart deployment/falcon-eye-dashboard -n ${NAMESPACE} 2>/dev/null || true
+    echo -e "  ${CYAN}↻${NC} falcon-eye-dashboard"
+
+    # File-server DaemonSet
+    kubectl rollout restart daemonset/falcon-eye-file-server -n ${NAMESPACE} 2>/dev/null || true
+    echo -e "  ${CYAN}↻${NC} falcon-eye-file-server (DaemonSet)"
+
+    # Dynamically-created camera deployments
+    CAM_DEPLOYS=$(kubectl get deployments -n ${NAMESPACE} -l component=camera --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
+    if [ -n "$CAM_DEPLOYS" ]; then
+        for dep in $CAM_DEPLOYS; do
+            kubectl rollout restart deployment/"$dep" -n ${NAMESPACE} 2>/dev/null || true
+            echo -e "  ${CYAN}↻${NC} ${dep}"
+        done
+    fi
+
+    # Dynamically-created recorder deployments
+    REC_DEPLOYS=$(kubectl get deployments -n ${NAMESPACE} -l component=recorder --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
+    if [ -n "$REC_DEPLOYS" ]; then
+        for dep in $REC_DEPLOYS; do
+            kubectl rollout restart deployment/"$dep" -n ${NAMESPACE} 2>/dev/null || true
+            echo -e "  ${CYAN}↻${NC} ${dep}"
+        done
+    fi
+
+    echo -e "${GREEN}✓ All components restarting with latest images${NC}"
+}
+
 # Wait for rollout
 wait_for_rollout() {
     echo ""
@@ -1145,6 +1174,11 @@ wait_for_rollout() {
     
     kubectl rollout status deployment/falcon-eye-api -n ${NAMESPACE} --timeout=120s 2>/dev/null || true
     kubectl rollout status deployment/falcon-eye-dashboard -n ${NAMESPACE} --timeout=120s 2>/dev/null || true
+
+    # Wait for any camera/recorder deployments too
+    for dep in $(kubectl get deployments -n ${NAMESPACE} -l 'component in (camera,recorder)' --no-headers -o custom-columns=":metadata.name" 2>/dev/null); do
+        kubectl rollout status deployment/"$dep" -n ${NAMESPACE} --timeout=120s 2>/dev/null || true
+    done
     
     echo -e "${GREEN}✓ All deployments ready${NC}"
 }
@@ -1289,6 +1323,7 @@ main() {
     deploy_frontend
     deploy_file_server
     deploy_cleanup_cronjob
+    restart_all_on_upgrade
     wait_for_rollout
     print_access_info
 }
