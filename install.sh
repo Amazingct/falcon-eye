@@ -321,23 +321,27 @@ check_prerequisites() {
 
     ensure_kubectl
 
-    # Try the current context first
+    # Check if a cluster is already reachable
+    CURRENT_CLUSTER_OK=false
     if kubectl cluster-info &> /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
+        CURRENT_CLUSTER_OK=true
         CLUSTER_NAME=$(kubectl config current-context 2>/dev/null || echo "unknown")
-        echo -e "  Cluster context: ${BLUE}${CLUSTER_NAME}${NC}"
-        return
     fi
 
-    # No cluster found — need user input
+    # Truly non-interactive (no TTY at all, e.g., CI): auto-connect or fail
     if [ "$HAS_TTY" = "false" ]; then
-        echo -e "${RED}✗ No reachable Kubernetes cluster found (non-interactive mode).${NC}"
-        echo -e "  Set KUBECONFIG or configure ~/.kube/config and try again."
-        exit 1
+        if [ "$CURRENT_CLUSTER_OK" = "true" ]; then
+            echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
+            echo -e "  Cluster context: ${BLUE}${CLUSTER_NAME}${NC}"
+            return
+        else
+            echo -e "${RED}✗ No reachable Kubernetes cluster found (non-interactive mode).${NC}"
+            echo -e "  Set KUBECONFIG or configure ~/.kube/config and try again."
+            exit 1
+        fi
     fi
 
-    echo ""
-    echo -e "${CYAN}No Kubernetes cluster found. How would you like to set one up?${NC}"
+    # Interactive: always let the user choose
     echo ""
 
     if [ "$(uname -s)" = "Darwin" ]; then
@@ -346,36 +350,80 @@ check_prerequisites() {
         NEW_LABEL="Create a new cluster  (installs k3s, recommended for single-node setup)"
     fi
 
-    echo -e "  ${CYAN}1)${NC} ${NEW_LABEL}"
-    echo -e "  ${CYAN}2)${NC} Connect to an existing cluster"
+    MENU_IDX=1
+
+    if [ "$CURRENT_CLUSTER_OK" = "true" ]; then
+        echo -e "${CYAN}Found existing cluster: ${BLUE}${CLUSTER_NAME}${NC}"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} Use this cluster  (${CLUSTER_NAME})"
+        MENU_IDX=2
+        echo -e "  ${CYAN}2)${NC} ${NEW_LABEL}"
+        echo -e "  ${CYAN}3)${NC} Connect to a different cluster"
+        MAX_CHOICE=3
+    else
+        echo -e "${CYAN}No Kubernetes cluster found. How would you like to set one up?${NC}"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} ${NEW_LABEL}"
+        echo -e "  ${CYAN}2)${NC} Connect to an existing cluster"
+        MAX_CHOICE=2
+    fi
     echo ""
 
-    prompt_read "Enter choice [1-2]: " SETUP_CHOICE
+    prompt_read "Enter choice [1-${MAX_CHOICE}]: " SETUP_CHOICE
     echo ""
 
-    case $SETUP_CHOICE in
-        1)
-            if [ "$(uname -s)" = "Darwin" ]; then
-                echo -e "${YELLOW}This will install k3d and create a k3s cluster in Docker.${NC}"
-            else
-                echo -e "${YELLOW}This will install k3s on this machine.${NC}"
-            fi
-            prompt_read "Continue? [y/N]: " CONFIRM_K3S
-            if [[ "$CONFIRM_K3S" =~ ^[Yy]$ ]]; then
-                install_k3s
-            else
-                echo -e "${RED}Aborted.${NC}"
+    if [ "$CURRENT_CLUSTER_OK" = "true" ]; then
+        case $SETUP_CHOICE in
+            1)
+                echo -e "${GREEN}✓ Using existing cluster${NC}"
+                ;;
+            2)
+                if [ "$(uname -s)" = "Darwin" ]; then
+                    echo -e "${YELLOW}This will install k3d and create a k3s cluster in Docker.${NC}"
+                else
+                    echo -e "${YELLOW}This will install k3s on this machine.${NC}"
+                fi
+                prompt_read "Continue? [y/N]: " CONFIRM_K3S
+                if [[ "$CONFIRM_K3S" =~ ^[Yy]$ ]]; then
+                    install_k3s
+                else
+                    echo -e "${RED}Aborted.${NC}"
+                    exit 1
+                fi
+                ;;
+            3)
+                choose_existing_cluster
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Exiting.${NC}"
                 exit 1
-            fi
-            ;;
-        2)
-            choose_existing_cluster
-            ;;
-        *)
-            echo -e "${RED}Invalid choice. Exiting.${NC}"
-            exit 1
-            ;;
-    esac
+                ;;
+        esac
+    else
+        case $SETUP_CHOICE in
+            1)
+                if [ "$(uname -s)" = "Darwin" ]; then
+                    echo -e "${YELLOW}This will install k3d and create a k3s cluster in Docker.${NC}"
+                else
+                    echo -e "${YELLOW}This will install k3s on this machine.${NC}"
+                fi
+                prompt_read "Continue? [y/N]: " CONFIRM_K3S
+                if [[ "$CONFIRM_K3S" =~ ^[Yy]$ ]]; then
+                    install_k3s
+                else
+                    echo -e "${RED}Aborted.${NC}"
+                    exit 1
+                fi
+                ;;
+            2)
+                choose_existing_cluster
+                ;;
+            *)
+                echo -e "${RED}Invalid choice. Exiting.${NC}"
+                exit 1
+                ;;
+        esac
+    fi
 
     echo -e "${GREEN}✓ Connected to Kubernetes cluster${NC}"
 
