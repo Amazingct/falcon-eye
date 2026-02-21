@@ -1,27 +1,80 @@
-"""Execute tool calls via the main Falcon-Eye API's generic tool execution endpoint"""
+"""Build LangChain tools dynamically from OpenAI function schemas.
+
+Each tool proxies execution to the main API's /api/tools/execute endpoint,
+so all tool logic stays in the API pod while the agent pod only handles LLM orchestration.
+"""
 import os
-import json
+from typing import Optional
+
 import httpx
+from pydantic import BaseModel, Field, create_model
+from langchain_core.tools import StructuredTool
 
 API_URL = os.getenv("API_URL", "http://falcon-eye-api:8000")
 
+_TYPE_MAP = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
 
-async def execute_tool(name: str, arguments: dict, agent_context: dict | None = None) -> str:
-    """Execute a tool by calling POST /api/tools/execute on the main API."""
-    try:
-        payload = {
-            "tool_name": name,
-            "arguments": arguments,
-        }
-        if agent_context:
-            payload["agent_context"] = agent_context
 
-        async with httpx.AsyncClient(base_url=API_URL, timeout=60) as client:
-            res = await client.post("/api/tools/execute", json=payload)
-            if res.status_code == 200:
-                data = res.json()
-                return data.get("result", "No result returned")
-            return f"API error ({res.status_code}): {res.text[:300]}"
+def _schema_to_pydantic(tool_name: str, params: dict) -> type[BaseModel] | None:
+    """Convert a JSON Schema 'properties' block into a dynamic Pydantic model."""
+    props = params.get("properties", {})
+    required = set(params.get("required", []))
+    if not props:
+        return None
+    fields: dict = {}
+    for pname, pdef in props.items():
+        py_type = _TYPE_MAP.get(pdef.get("type", "string"), str)
+        desc = pdef.get("description", "")
+        if pname in required:
+            fields[pname] = (py_type, Field(description=desc))
+        else:
+            fields[pname] = (Optional[py_type], Field(default=pdef.get("default"), description=desc))
+    return create_model(f"{tool_name}_Input", **fields)
 
-    except Exception as e:
-        return f"Tool execution error: {e}"
+
+def build_tools(
+    tools_schema: list[dict],
+    api_url: str | None = None,
+    agent_context: dict | None = None,
+) -> list[StructuredTool]:
+    """Create LangChain StructuredTool instances from OpenAI function-calling schemas.
+
+    Each tool calls POST {api_url}/api/tools/execute with the tool name and arguments.
+    """
+    base = api_url or API_URL
+    tools: list[StructuredTool] = []
+
+    for schema in tools_schema:
+        fn = schema["function"]
+        name = fn["name"]
+        desc = fn["description"]
+        params = fn.get("parameters", {"type": "object", "properties": {}})
+        args_model = _schema_to_pydantic(name, params)
+
+        async def _execute(__tool_name=name, __ctx=agent_context, **kwargs):
+            payload: dict = {"tool_name": __tool_name, "arguments": kwargs}
+            if __ctx:
+                payload["agent_context"] = __ctx
+            async with httpx.AsyncClient(base_url=base, timeout=60) as client:
+                res = await client.post("/api/tools/execute", json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    return data.get("result", "No result returned")
+                return f"Tool error ({res.status_code}): {res.text[:300]}"
+
+        tool = StructuredTool.from_function(
+            coroutine=_execute,
+            name=name,
+            description=desc,
+            args_schema=args_model,
+        )
+        tools.append(tool)
+
+    return tools
