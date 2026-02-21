@@ -135,8 +135,7 @@ install_k3d_mac() {
 
     echo -e "${YELLOW}Creating k3d cluster 'falcon-eye'...${NC}"
     k3d cluster create falcon-eye \
-        --port "30800:30800@server:0" \
-        --port "30900:30900@server:0" \
+        --port "30000-32767:30000-32767@server:0" \
         --wait --timeout 120s
 
     mkdir -p ~/.kube
@@ -890,8 +889,9 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 EOF
 
-    # Service applied separately — delete-and-recreate if NodePort conflicts
-    cat <<SVCEOF | kubectl apply -n ${NAMESPACE} -f - 2>/dev/null || {
+    # Service: keep existing (preserves assigned nodePort) or create new
+    if ! kubectl get svc falcon-eye-api -n ${NAMESPACE} &>/dev/null; then
+        cat <<SVCEOF | kubectl apply -n ${NAMESPACE} -f -
 apiVersion: v1
 kind: Service
 metadata:
@@ -903,24 +903,8 @@ spec:
   ports:
   - port: ${API_PORT}
     targetPort: ${API_PORT}
-    nodePort: 30800
 SVCEOF
-        kubectl delete svc falcon-eye-api -n ${NAMESPACE} 2>/dev/null || true
-        cat <<SVCEOF2 | kubectl apply -n ${NAMESPACE} -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: falcon-eye-api
-spec:
-  type: NodePort
-  selector:
-    app: falcon-eye-api
-  ports:
-  - port: ${API_PORT}
-    targetPort: ${API_PORT}
-    nodePort: 30800
-SVCEOF2
-    }
+    fi
 
     echo -e "${GREEN}✓ Falcon-Eye API configured${NC}"
 }
@@ -960,7 +944,11 @@ $([ -n "$DASHBOARD_NODE" ] && echo "      nodeSelector:
         env:
         - name: API_URL
           value: "http://falcon-eye-api:${API_PORT}"
----
+EOF
+
+    # Service: keep existing (preserves assigned nodePort) or create new
+    if ! kubectl get svc falcon-eye-dashboard -n ${NAMESPACE} &>/dev/null; then
+        cat <<SVCEOF | kubectl apply -n ${NAMESPACE} -f -
 apiVersion: v1
 kind: Service
 metadata:
@@ -972,9 +960,9 @@ spec:
   ports:
   - port: 80
     targetPort: 80
-    nodePort: 30900
-EOF
-    
+SVCEOF
+    fi
+
     echo -e "${GREEN}✓ Dashboard configured${NC}"
 }
 
@@ -1215,10 +1203,12 @@ print_access_info() {
     echo ""
     
     NODE_IP=$(get_access_host)
-    
+    DASH_PORT=$(kubectl get svc falcon-eye-dashboard -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "?")
+    API_NP=$(kubectl get svc falcon-eye-api -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "?")
+
     echo -e "${YELLOW}Access:${NC}"
-    echo -e "  📊 Dashboard:  http://${NODE_IP}:30900"
-    echo -e "  🔌 API:        http://${NODE_IP}:30800"
+    echo -e "  📊 Dashboard:  http://${NODE_IP}:${DASH_PORT}"
+    echo -e "  🔌 API:        http://${NODE_IP}:${API_NP}"
     echo ""
     
     # Show pod status
@@ -1274,7 +1264,9 @@ show_status() {
     fi
     
     NODE_IP=$(get_access_host)
-    
+    DASH_PORT=$(kubectl get svc falcon-eye-dashboard -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "?")
+    API_NP=$(kubectl get svc falcon-eye-api -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "?")
+
     echo -e "${GREEN}✓ Falcon-Eye is installed${NC}"
     echo ""
     
@@ -1282,8 +1274,8 @@ show_status() {
     echo -e "${YELLOW}                        ACCESS URLS                         ${NC}"
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  📊 ${CYAN}Dashboard${NC}:  http://${NODE_IP}:30900"
-    echo -e "  🔌 ${CYAN}API${NC}:        http://${NODE_IP}:30800"
+    echo -e "  📊 ${CYAN}Dashboard${NC}:  http://${NODE_IP}:${DASH_PORT}"
+    echo -e "  🔌 ${CYAN}API${NC}:        http://${NODE_IP}:${API_NP}"
     echo ""
     
     echo -e "${YELLOW}═══════════════════════════════════════════════════════════${NC}"
