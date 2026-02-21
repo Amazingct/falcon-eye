@@ -102,7 +102,8 @@ async def run_chat(
     llm = get_llm(provider, model_name, api_key, temperature, max_tokens)
 
     agent_ctx = {"provider": provider, "model": model_name, "api_key": api_key}
-    tools = build_tools(tools_schema, API_URL, agent_ctx)
+    media_collector: list[dict] = []
+    tools = build_tools(tools_schema, media_collector, API_URL, agent_ctx)
 
     # Convert dict messages to LangChain message objects
     lc_messages: list = []
@@ -141,7 +142,7 @@ async def run_chat(
         response_text,
         total_input or None,
         total_output or None,
-        [],
+        media_collector,
     )
 
 

@@ -516,24 +516,30 @@ HANDLER_MAP = {
 }
 
 
-async def execute_tool(tool_name: str, arguments: dict, agent_context: dict | None = None) -> str:
+async def execute_tool(
+    tool_name: str,
+    arguments: dict,
+    agent_context: dict | None = None,
+) -> tuple[str, list[dict]]:
     """Execute a tool by its function name.
 
-    ``agent_context`` carries the calling agent's LLM config so tools like
-    ``analyze_camera`` can make vision calls with the agent's own credentials.
+    Returns (result_text, media_items).  ``media_items`` is populated when a
+    tool like ``send_media`` queues files for delivery.
     """
     from app.tools.registry import TOOLS_REGISTRY
 
-    # Inject agent context for handlers that need it
-    if agent_context:
-        arguments = {**arguments, "_agent_context": agent_context}
+    if agent_context is None:
+        agent_context = {}
+    media_list: list[dict] = []
+    agent_context["pending_media"] = media_list
+    arguments = {**arguments, "_agent_context": agent_context}
 
-    # Find tool by function name
     for tool_id, tool in TOOLS_REGISTRY.items():
         if tool["name"] == tool_name:
             handler_path = tool["handler"]
             handler = HANDLER_MAP.get(handler_path)
             if handler:
-                return await handler(**arguments)
-            return f"Handler not found: {handler_path}"
-    return f"Unknown tool: {tool_name}"
+                result = await handler(**arguments)
+                return result, media_list
+            return f"Handler not found: {handler_path}", []
+    return f"Unknown tool: {tool_name}", []

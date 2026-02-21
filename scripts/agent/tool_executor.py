@@ -2,6 +2,9 @@
 
 Each tool proxies execution to the main API's /api/tools/execute endpoint,
 so all tool logic stays in the API pod while the agent pod only handles LLM orchestration.
+
+Media items (from send_media) are collected in a shared list that the caller
+can read after the agent run completes.
 """
 import os
 from typing import Optional
@@ -41,12 +44,14 @@ def _schema_to_pydantic(tool_name: str, params: dict) -> type[BaseModel] | None:
 
 def build_tools(
     tools_schema: list[dict],
+    media_collector: list[dict],
     api_url: str | None = None,
     agent_context: dict | None = None,
 ) -> list[StructuredTool]:
     """Create LangChain StructuredTool instances from OpenAI function-calling schemas.
 
-    Each tool calls POST {api_url}/api/tools/execute with the tool name and arguments.
+    Each tool calls POST {api_url}/api/tools/execute.  Any media items returned
+    by the API (e.g. from send_media) are appended to ``media_collector``.
     """
     base = api_url or API_URL
     tools: list[StructuredTool] = []
@@ -58,7 +63,7 @@ def build_tools(
         params = fn.get("parameters", {"type": "object", "properties": {}})
         args_model = _schema_to_pydantic(name, params)
 
-        async def _execute(__tool_name=name, __ctx=agent_context, **kwargs):
+        async def _execute(__tool_name=name, __ctx=agent_context, __media=media_collector, **kwargs):
             payload: dict = {"tool_name": __tool_name, "arguments": kwargs}
             if __ctx:
                 payload["agent_context"] = __ctx
@@ -66,6 +71,8 @@ def build_tools(
                 res = await client.post("/api/tools/execute", json=payload)
                 if res.status_code == 200:
                     data = res.json()
+                    for item in data.get("media", []):
+                        __media.append(item)
                     return data.get("result", "No result returned")
                 return f"Tool error ({res.status_code}): {res.text[:300]}"
 

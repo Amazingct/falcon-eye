@@ -35,8 +35,11 @@ async def list_tools():
 async def execute_tool_endpoint(data: ToolExecuteRequest):
     """Execute a tool by name. Used by agent pods to run tools via the API."""
     try:
-        result = await execute_tool(data.tool_name, data.arguments, agent_context=data.agent_context)
-        return {"result": result}
+        result, media = await execute_tool(data.tool_name, data.arguments, agent_context=data.agent_context)
+        resp: dict = {"result": result}
+        if media:
+            resp["media"] = media
+        return resp
     except Exception as e:
         return {"result": f"Tool execution error: {e}", "error": True}
 
