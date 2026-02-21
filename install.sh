@@ -1142,43 +1142,43 @@ restart_all_on_upgrade() {
     echo ""
     echo -e "${YELLOW}Restarting all Falcon-Eye components to pull latest images...${NC}"
 
-    # Core deployments
-    kubectl rollout restart deployment/falcon-eye-api -n ${NAMESPACE} 2>/dev/null || true
-    echo -e "  ${CYAN}↻${NC} falcon-eye-api"
+    # Helper: patch a deployment's first container to imagePullPolicy: Always, then restart
+    patch_and_restart_deploy() {
+        local dep="$1"
+        local ns="$2"
+        CONTAINER=$(kubectl get deployment/"$dep" -n "$ns" -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null)
+        if [ -n "$CONTAINER" ]; then
+            kubectl patch deployment/"$dep" -n "$ns" \
+                -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${CONTAINER}\",\"imagePullPolicy\":\"Always\"}]}}}}" \
+                2>/dev/null || true
+        fi
+        kubectl rollout restart deployment/"$dep" -n "$ns" 2>/dev/null || true
+        echo -e "  ${CYAN}↻${NC} ${dep}"
+    }
 
-    kubectl rollout restart deployment/falcon-eye-dashboard -n ${NAMESPACE} 2>/dev/null || true
-    echo -e "  ${CYAN}↻${NC} falcon-eye-dashboard"
+    # Core deployments
+    patch_and_restart_deploy "falcon-eye-api" "${NAMESPACE}"
+    patch_and_restart_deploy "falcon-eye-dashboard" "${NAMESPACE}"
 
     # File-server DaemonSet
+    DS_CONTAINER=$(kubectl get daemonset/falcon-eye-file-server -n ${NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null)
+    if [ -n "$DS_CONTAINER" ]; then
+        kubectl patch daemonset/falcon-eye-file-server -n ${NAMESPACE} \
+            -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${DS_CONTAINER}\",\"imagePullPolicy\":\"Always\"}]}}}}" \
+            2>/dev/null || true
+    fi
     kubectl rollout restart daemonset/falcon-eye-file-server -n ${NAMESPACE} 2>/dev/null || true
     echo -e "  ${CYAN}↻${NC} falcon-eye-file-server (DaemonSet)"
 
-    # Dynamically-created camera deployments
-    CAM_DEPLOYS=$(kubectl get deployments -n ${NAMESPACE} -l component=camera --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
-    if [ -n "$CAM_DEPLOYS" ]; then
-        for dep in $CAM_DEPLOYS; do
-            kubectl rollout restart deployment/"$dep" -n ${NAMESPACE} 2>/dev/null || true
-            echo -e "  ${CYAN}↻${NC} ${dep}"
-        done
-    fi
-
-    # Dynamically-created recorder deployments
-    REC_DEPLOYS=$(kubectl get deployments -n ${NAMESPACE} -l component=recorder --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
-    if [ -n "$REC_DEPLOYS" ]; then
-        for dep in $REC_DEPLOYS; do
-            kubectl rollout restart deployment/"$dep" -n ${NAMESPACE} 2>/dev/null || true
-            echo -e "  ${CYAN}↻${NC} ${dep}"
-        done
-    fi
-
-    # Agent deployments
-    AGENT_DEPLOYS=$(kubectl get deployments -n ${NAMESPACE} -l component=agent --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
-    if [ -n "$AGENT_DEPLOYS" ]; then
-        for dep in $AGENT_DEPLOYS; do
-            kubectl rollout restart deployment/"$dep" -n ${NAMESPACE} 2>/dev/null || true
-            echo -e "  ${CYAN}↻${NC} ${dep}"
-        done
-    fi
+    # Dynamically-created deployments (camera, recorder, agent)
+    for component in camera recorder agent; do
+        DEPLOYS=$(kubectl get deployments -n ${NAMESPACE} -l component=${component} --no-headers -o custom-columns=":metadata.name" 2>/dev/null)
+        if [ -n "$DEPLOYS" ]; then
+            for dep in $DEPLOYS; do
+                patch_and_restart_deploy "$dep" "${NAMESPACE}"
+            done
+        fi
+    done
 
     echo -e "${GREEN}✓ All components restarting with latest images${NC}"
 }

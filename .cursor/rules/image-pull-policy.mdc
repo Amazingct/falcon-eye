@@ -1,0 +1,13 @@
+---
+description: Ensure all K8s pods always pull latest images on upgrade/restart
+globs: install.sh,scripts/cam-manager-py/app/services/k8s.py
+alwaysApply: false
+---
+
+# Image Pull Policy
+
+All Falcon-Eye pods must use `imagePullPolicy: Always` so upgrades pull the latest image.
+
+- In `install.sh`: the `restart_all_on_upgrade` function must **patch** every deployment and daemonset to `imagePullPolicy: Always` before restarting. A simple `kubectl rollout restart` alone is not enough — it keeps the existing spec.
+- In `k8s.py`: dynamically-created deployments (cameras, recorders, agents) must use `imagePullPolicy: Always` (not `IfNotPresent`) so new pods always get the latest image.
+- The only exception is `LOCAL_TEST=true` mode, where locally-built images use `IfNotPresent`.
