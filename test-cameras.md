@@ -1,15 +1,23 @@
-# Public Test Cameras for Falcon-Eye
+# Test Cameras for Falcon-Eye
 
-Verified working as of 2026-02-20. Use these for testing HTTP/MJPEG camera support.
+Last updated: 2026-02-21
 
-## ✅ Working
+## 🏠 Local Cameras (Daniel's Setup)
+
+| Name | Protocol | URL / Device | Node | Resolution | Notes |
+|------|----------|-------------|------|-----------|-------|
+| Baby Cam | RTSP | `rtsp://admin:AmazingCT123@192.168.1.188:8554/stream0` | falcon | 2560x2880 (HEVC) | MOES/Tuya WiFi camera. ONVIF port 8554. User: admin |
+| USB Webcam | USB | `/dev/video0` | falcon | 640x480 | Logitech UVC camera (046d:0825). Supports YUYV + MJPG |
+| Norway Ski Station | HTTP | `http://77.222.181.11:8080/mjpg/video.mjpg` | ace | 800x500 | Public cam, Kaiskuru Skistadion, Norway |
+
+## ✅ Working Public Cameras
 
 | # | Name | URL | Resolution | Protocol | Notes |
 |---|------|-----|-----------|----------|-------|
 | 1 | Kaiskuru Skistadion, Norway | `http://77.222.181.11:8080/mjpg/video.mjpg` | 800x500 | HTTP/MJPEG | Snow/houses view. Stable, consistent across multiple tests. |
 | 2 | Hotel Lobby (EU) | `http://158.58.130.148/mjpg/video.mjpg` | 640x480 | HTTP/MJPEG | Flaky — rate-limits after a few connections. Returns 503 under load. |
 
-## ❌ Dead (as of 2026-02-20)
+## ❌ Dead Public Cameras (as of 2026-02-20)
 
 | URL | Notes |
 |-----|-------|
@@ -30,3 +38,4 @@ Verified working as of 2026-02-20. Use these for testing HTTP/MJPEG camera suppo
 - HTTP/MJPEG cameras work best with Falcon-Eye's HTTP proxy mode (no ffmpeg needed)
 - RTSP public cameras are nearly extinct — most require auth now
 - For reliable testing, use your own cameras (USB webcam or Tuya/ONVIF IP cam)
+- Baby Cam RTSP requires ONVIF enabled in Tuya/Smart Life app
