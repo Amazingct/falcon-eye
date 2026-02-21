@@ -773,7 +773,7 @@ EOF
 # Deploy Falcon-Eye backend
 deploy_backend() {
     echo -e "${YELLOW}[6/9] Deploying Falcon-Eye API...${NC}"
-    
+
     cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
 ---
 apiVersion: v1
@@ -854,19 +854,6 @@ $([ -n "$API_NODE" ] && echo "      nodeSelector:
           type: DirectoryOrCreate
 ---
 apiVersion: v1
-kind: Service
-metadata:
-  name: falcon-eye-api
-spec:
-  type: NodePort
-  selector:
-    app: falcon-eye-api
-  ports:
-  - port: ${API_PORT}
-    targetPort: ${API_PORT}
-    nodePort: 30800
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: falcon-eye-sa
@@ -902,7 +889,39 @@ roleRef:
   name: falcon-eye-role
   apiGroup: rbac.authorization.k8s.io
 EOF
-    
+
+    # Service applied separately — delete-and-recreate if NodePort conflicts
+    cat <<SVCEOF | kubectl apply -n ${NAMESPACE} -f - 2>/dev/null || {
+apiVersion: v1
+kind: Service
+metadata:
+  name: falcon-eye-api
+spec:
+  type: NodePort
+  selector:
+    app: falcon-eye-api
+  ports:
+  - port: ${API_PORT}
+    targetPort: ${API_PORT}
+    nodePort: 30800
+SVCEOF
+        kubectl delete svc falcon-eye-api -n ${NAMESPACE} 2>/dev/null || true
+        cat <<SVCEOF2 | kubectl apply -n ${NAMESPACE} -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: falcon-eye-api
+spec:
+  type: NodePort
+  selector:
+    app: falcon-eye-api
+  ports:
+  - port: ${API_PORT}
+    targetPort: ${API_PORT}
+    nodePort: 30800
+SVCEOF2
+    }
+
     echo -e "${GREEN}✓ Falcon-Eye API configured${NC}"
 }
 
