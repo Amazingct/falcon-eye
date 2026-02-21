@@ -113,8 +113,32 @@ async def start_telegram_bot():
     from telegram import Update
     from telegram.ext import Application, MessageHandler, CommandHandler, filters
 
-    # Track sessions per chat
     chat_sessions: dict[int, str] = {}
+    chat_id_persisted = False
+
+    async def persist_chat_id(chat_id: int):
+        """Save the Telegram chat_id to the agent's channel_config so cron jobs can deliver messages."""
+        nonlocal chat_id_persisted
+        if chat_id_persisted:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                res = await client.get(f"{API_URL}/api/agents/{AGENT_ID}")
+                if res.status_code == 200:
+                    agent_data = res.json()
+                    config = agent_data.get("channel_config") or {}
+                    if config.get("chat_id") == chat_id:
+                        chat_id_persisted = True
+                        return
+                    config["chat_id"] = chat_id
+                    await client.patch(
+                        f"{API_URL}/api/agents/{AGENT_ID}",
+                        json={"channel_config": config},
+                    )
+                    chat_id_persisted = True
+                    logger.info(f"Persisted Telegram chat_id={chat_id} to agent channel_config")
+        except Exception as e:
+            logger.warning(f"Failed to persist chat_id: {e}")
 
     async def send_media_to_chat(chat, media_item, bot):
         """Download a file from the API and send it via Telegram."""
@@ -156,6 +180,8 @@ async def start_telegram_bot():
 
         session_id = chat_sessions[chat_id]
 
+        asyncio.ensure_future(persist_chat_id(chat_id))
+
         await update.message.chat.send_action("typing")
 
         result = await process_message(
@@ -178,6 +204,7 @@ async def start_telegram_bot():
     async def handle_start(update: Update, context):
         chat_id = update.effective_chat.id
         chat_sessions[chat_id] = str(uuid.uuid4())
+        asyncio.ensure_future(persist_chat_id(chat_id))
         await update.message.reply_text("🦅 Hello! I'm your Falcon-Eye agent. How can I help?")
 
     async def handle_new_session(update: Update, context):
