@@ -864,6 +864,72 @@ async def send_media(path: str, caption: str = "", media_type: str = "auto", **k
         return f"Error preparing media: {e}"
 
 
+def _media_type_from_item(item: dict) -> str:
+    """Map a structured media item to send_media's media_type."""
+    try:
+        raw_type = (item.get("type") or "").lower().lstrip(".")
+        path = (item.get("path") or "").lower()
+        ext = raw_type or os.path.splitext(path)[1].lower().lstrip(".")
+        dot_ext = f".{ext}" if ext else ""
+        if dot_ext in PHOTO_EXTENSIONS:
+            return "photo"
+        if dot_ext in VIDEO_EXTENSIONS:
+            return "video"
+    except Exception:
+        pass
+    return "document"
+
+
+async def deliver_media_message(
+    media: list,
+    general_caption: str | None = None,
+    session_id: str | None = None,
+    **kwargs,
+) -> str:
+    """Persist a structured assistant_media message and queue attachments for delivery."""
+    ctx = kwargs.get("_agent_context", {}) or {}
+    agent_id = ctx.get("agent_id")
+    resolved_session = session_id or ctx.get("session_id")
+    if not agent_id or not resolved_session:
+        return "Error: agent context missing agent_id/session_id"
+
+    payload = {
+        "general_caption": general_caption,
+        "media": media or [],
+    }
+
+    # 1) Persist as an assistant_media message in chat history
+    try:
+        await _api_post(f"/api/chat/{agent_id}/messages/save", {
+            "session_id": resolved_session,
+            "role": "assistant_media",
+            "content": payload,
+            "source": "agent",
+            "source_user": ctx.get("source_user"),
+        })
+    except Exception as e:
+        return f"Error: failed to persist media message ({e})"
+
+    # 2) Queue each item for channel delivery (Telegram, etc.) via legacy media side-channel
+    queued = 0
+    for item in (media or []):
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        if not path or not isinstance(path, str):
+            continue
+        caption = item.get("caption") or general_caption or ""
+        media_type = _media_type_from_item(item)
+        try:
+            await send_media(path=path, caption=caption, media_type=media_type, **kwargs)
+            queued += 1
+        except Exception:
+            # Best-effort; persistence already happened
+            pass
+
+    return f"Delivered {len(media or [])} media item(s) to session {resolved_session}. Queued {queued} attachment(s)."
+
+
 async def file_delete(path: str, **kwargs) -> str:
     """Delete a file from the shared agent filesystem."""
     try:
@@ -920,6 +986,7 @@ HANDLER_MAP = {
     "app.tools.handlers.file_list": file_list,
     "app.tools.handlers.file_delete": file_delete,
     "app.tools.handlers.send_media": send_media,
+    "app.tools.handlers.deliver_media_message": deliver_media_message,
 }
 
 

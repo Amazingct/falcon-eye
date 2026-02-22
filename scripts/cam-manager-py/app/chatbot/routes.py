@@ -15,9 +15,41 @@ from datetime import datetime
 
 from app.chatbot.graph import stream_chat, create_graph
 from app.database import get_db
-from app.models.chat import ChatSession, ChatMessage
+from app.models.chat import ChatSession, ChatMessage, MEDIA_ROLES
 
 router = APIRouter(prefix="/api/chat", tags=["chatbot"])
+
+def _summarize_media_content(content: dict) -> str:
+    if not isinstance(content, dict):
+        return "(media)"
+    general = content.get("general_caption")
+    media = content.get("media") or []
+    parts: list[str] = []
+    if general:
+        parts.append(f"Media caption: {general}")
+    if isinstance(media, list) and media:
+        parts.append(f"Media items: {len(media)}")
+        for i, item in enumerate(media[:20], start=1):
+            if not isinstance(item, dict):
+                continue
+            parts.append(f"{i}. {item.get('type','file')} @ {item.get('path')}")
+    else:
+        parts.append("Media: (no items)")
+    return "\n".join(parts)
+
+
+def _coerce_role_for_llm(role: str) -> str:
+    if role == "assistant_media":
+        return "assistant"
+    if role == "user_media":
+        return "user"
+    return role
+
+
+def _coerce_content_for_llm(msg: ChatMessage) -> str:
+    if msg.content_type == "media" or msg.role in MEDIA_ROLES:
+        return _summarize_media_content(msg.content_media or {})
+    return msg.content_text if msg.content_text is not None else (msg.content or "")
 
 
 class Message(BaseModel):
@@ -309,6 +341,9 @@ async def chat_in_session(
         role="user",
         content=request.content,
     )
+    user_msg.content_type = "text"
+    user_msg.content_text = request.content
+    user_msg.content_media = None
     db.add(user_msg)
     await db.commit()
     
@@ -319,7 +354,7 @@ async def chat_in_session(
         .order_by(ChatMessage.created_at)
     )
     all_messages = msgs_result.scalars().all()
-    messages = [{"role": m.role, "content": m.content} for m in all_messages]
+    messages = [{"role": _coerce_role_for_llm(m.role), "content": _coerce_content_for_llm(m)} for m in all_messages]
     
     if request.stream:
         return EventSourceResponse(
@@ -339,6 +374,9 @@ async def chat_in_session(
             role="assistant",
             content=full_response,
         )
+        assistant_msg.content_type = "text"
+        assistant_msg.content_text = full_response
+        assistant_msg.content_media = None
         db.add(assistant_msg)
         
         # Auto-name session if not named and has 2+ messages
@@ -378,6 +416,9 @@ async def stream_session_response(session_id: UUID, messages: list[dict]):
                 role="assistant",
                 content=full_response,
             )
+            assistant_msg.content_type = "text"
+            assistant_msg.content_text = full_response
+            assistant_msg.content_media = None
             db.add(assistant_msg)
             
             # Auto-name session if needed

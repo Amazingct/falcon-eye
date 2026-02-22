@@ -2,10 +2,12 @@
 from datetime import datetime
 from uuid import uuid4
 from sqlalchemy import Column, String, DateTime, Text, ForeignKey, Integer
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
 from app.models.camera import Base
+
+MEDIA_ROLES = {"assistant_media", "user_media"}
 
 
 class ChatSession(Base):
@@ -43,18 +45,29 @@ class ChatMessage(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     session_id = Column(UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    role = Column(String(20), nullable=False)  # user | assistant
-    content = Column(Text, nullable=False)
+    role = Column(String(20), nullable=False)  # user | assistant | assistant_media | user_media
+    # Legacy text payload (kept for backwards compatibility; always non-null)
+    content = Column(Text, nullable=False, default="")
+
+    # New typed content (preferred)
+    content_type = Column(String(20), nullable=True, default="text")  # text | media
+    content_text = Column(Text, nullable=True)
+    content_media = Column(JSONB, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationship to session
     session = relationship("ChatSession", back_populates="messages")
     
+    def content_for_api(self):
+        if self.content_type == "media" or self.role in MEDIA_ROLES:
+            return self.content_media or {}
+        return self.content_text if self.content_text is not None else (self.content or "")
+
     def to_dict(self) -> dict:
         return {
             "id": str(self.id),
             "session_id": str(self.session_id),
             "role": self.role,
-            "content": self.content,
+            "content": self.content_for_api(),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

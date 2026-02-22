@@ -7,6 +7,8 @@ from sqlalchemy.orm import relationship
 
 from app.models.camera import Base
 
+MEDIA_ROLES = {"assistant_media", "user_media"}
+
 
 class Agent(Base):
     """Agent model - represents an AI agent (built-in or pod)"""
@@ -83,8 +85,14 @@ class AgentChatMessage(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False, index=True)
     session_id = Column(String(100), nullable=False, index=True)
-    role = Column(String(20), nullable=False)  # user | assistant | system
-    content = Column(Text, nullable=False)
+    role = Column(String(20), nullable=False)  # user | assistant | system | assistant_media | user_media
+    # Legacy text payload (kept for backwards compatibility; always non-null)
+    content = Column(Text, nullable=False, default="")
+
+    # New typed content (preferred)
+    content_type = Column(String(20), nullable=True, default="text")  # text | media
+    content_text = Column(Text, nullable=True)
+    content_media = Column(JSONB, nullable=True)
 
     # Source tracking
     source = Column(String(50), nullable=True)  # dashboard | telegram | cron | api
@@ -103,13 +111,19 @@ class AgentChatMessage(Base):
         Index("idx_agent_session", "agent_id", "session_id", "created_at"),
     )
 
+    def content_for_api(self):
+        """Return content in API-friendly shape: str for text, dict for media."""
+        if self.content_type == "media" or self.role in MEDIA_ROLES:
+            return self.content_media or {}
+        return self.content_text if self.content_text is not None else (self.content or "")
+
     def to_dict(self) -> dict:
         return {
             "id": str(self.id),
             "agent_id": str(self.agent_id),
             "session_id": self.session_id,
             "role": self.role,
-            "content": self.content,
+            "content": self.content_for_api(),
             "source": self.source,
             "source_user": self.source_user,
             "prompt_tokens": self.prompt_tokens,

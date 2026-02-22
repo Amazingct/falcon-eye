@@ -46,12 +46,43 @@ async def init_db():
         migrations = [
             "ALTER TABLE recordings ADD COLUMN IF NOT EXISTS node_name VARCHAR",
             "ALTER TABLE cron_jobs ADD COLUMN IF NOT EXISTS session_id VARCHAR(100)",
+
+            # Typed chat content (agent chat)
+            "ALTER TABLE agent_chat_messages ADD COLUMN IF NOT EXISTS content_type VARCHAR(20)",
+            "ALTER TABLE agent_chat_messages ADD COLUMN IF NOT EXISTS content_text TEXT",
+            "ALTER TABLE agent_chat_messages ADD COLUMN IF NOT EXISTS content_media JSONB",
+
+            # Typed chat content (chatbot sessions)
+            "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content_type VARCHAR(20)",
+            "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content_text TEXT",
+            "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content_media JSONB",
         ]
         for sql in migrations:
             try:
                 await conn.execute(text(sql))
             except Exception:
                 pass
+
+        # Backfill defaults for older rows (best-effort)
+        try:
+            await conn.execute(text(
+                "UPDATE agent_chat_messages "
+                "SET content_type = COALESCE(content_type, 'text'), "
+                "    content_text = COALESCE(content_text, content) "
+                "WHERE content_type IS NULL OR content_text IS NULL"
+            ))
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(text(
+                "UPDATE chat_messages "
+                "SET content_type = COALESCE(content_type, 'text'), "
+                "    content_text = COALESCE(content_text, content) "
+                "WHERE content_type IS NULL OR content_text IS NULL"
+            ))
+        except Exception:
+            pass
     
     print("Database initialized")
 

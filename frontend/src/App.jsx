@@ -6,6 +6,7 @@ import AgentChat from './components/AgentChat'
 import AgentDetailPage from './components/AgentDetailPage'
 import CronExpressionBuilder from './components/CronExpressionBuilder'
 import ChatMarkdown from './components/ChatMarkdown'
+import ChatMedia from './components/ChatMedia'
 import { SetupPage, LoginPage } from './components/AuthPages'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
@@ -2148,6 +2149,12 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   const [newName, setNewName] = useState('')
   const messagesEndRef = React.useRef(null)
 
+  const isMediaMessage = (msg) => {
+    if (!msg) return false
+    if (msg.role === 'assistant_media' || msg.role === 'user_media') return true
+    return typeof msg.content === 'object' && msg.content && Array.isArray(msg.content.media)
+  }
+
   // Fetch sessions on mount
   const fetchSessions = async () => {
     try {
@@ -2381,7 +2388,11 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
                 {msg.thinking ? (
                   <div className="flex items-center space-x-2 text-sm text-gray-400"><Loader2 className="h-4 w-4 animate-spin" /><span>Getting info...</span></div>
                 ) : msg.content ? (
-                  <ChatMarkdown content={msg.content} isUser={msg.role === 'user'} />
+                  isMediaMessage(msg) ? (
+                    <ChatMedia content={msg.content} apiUrl={API_URL} />
+                  ) : (
+                    <ChatMarkdown content={typeof msg.content === 'string' ? msg.content : ''} isUser={msg.role === 'user'} />
+                  )
                 ) : msg.role === 'assistant' && isLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : null}

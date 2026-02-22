@@ -2,8 +2,15 @@ import { authFetch } from '../App'
 import React, { useState, useEffect, useRef } from 'react'
 import { MessageCircle, Send, Plus, RefreshCw, Loader2, Bot, ChevronDown } from 'lucide-react'
 import ChatMarkdown from './ChatMarkdown'
+import ChatMedia from './ChatMedia'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
+
+const isMediaMessage = (msg) => {
+  if (!msg) return false
+  if (msg.role === 'assistant_media' || msg.role === 'user_media') return true
+  return typeof msg.content === 'object' && msg.content && Array.isArray(msg.content.media)
+}
 
 export default function AgentChat() {
   const [agents, setAgents] = useState([])
@@ -90,7 +97,14 @@ export default function AgentChat() {
       })
       if (res.ok) {
         const data = await res.json()
-        setMessages(prev => [...prev, { role: 'assistant', content: data.response, source: 'dashboard', created_at: data.timestamp }])
+        // Refresh history so tool-emitted media messages appear immediately
+        try {
+          const histRes = await authFetch(`${API_URL}/chat/${selectedAgent.id}/history?session_id=${sessionId}&limit=200`)
+          const hist = await histRes.json()
+          setMessages(hist.messages || [])
+        } catch (e) {
+          setMessages(prev => [...prev, { role: 'assistant', content: data.response, source: 'dashboard', created_at: data.timestamp }])
+        }
       } else {
         const errData = await res.json().catch(() => null)
         const detail = errData?.detail || 'Error getting response'
@@ -186,7 +200,11 @@ export default function AgentChat() {
                     {sourceBadge(msg.source)}
                     {msg.source_user && <span className="text-[10px] text-gray-400">@{msg.source_user}</span>}
                   </div>
-                  <ChatMarkdown content={msg.content} isUser={msg.role === 'user'} />
+                  {isMediaMessage(msg) ? (
+                    <ChatMedia content={msg.content} apiUrl={API_URL} />
+                  ) : (
+                    <ChatMarkdown content={typeof msg.content === 'string' ? msg.content : ''} isUser={msg.role === 'user'} />
+                  )}
                 </div>
               </div>
             ))

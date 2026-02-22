@@ -222,14 +222,57 @@ Important: do **not** embed raw binary; only references/URLs + captions/metadata
 
 ### AI producing media for humans
 
+To make it easy/reliable for the AI to output structured media messages, introduce a **dedicated tool call** that accepts the `assistant_media` payload as parameters, persists it, and routes it to the active channel(s).
+
 We need a single internal way for AI/tooling to “emit” media messages:
 
-- The tool layer (`send_media`, `query_record`, etc.) should be able to create an `assistant_media` message in chat history.
-- The API should return that message to the UI so it renders immediately.
+- The tool layer (`query_record`, etc.) should be able to create an `assistant_media` message in chat history via a tool call.
+- The message must be **automatically routable**:
+  - **Dashboard UI**: appears in the current session history (and optionally returned inline in the send response)
+  - **Telegram**: emitted as Telegram attachments (photo/video/audio/document)
 
 This implies we should prefer “message-as-data” rather than “string response + separate media side-channel”.
 
 ---
+
+## New Tool: `deliver_media_message` (AI-friendly structured output)
+
+### Purpose
+
+Let the AI produce a structured `assistant_media` message via a tool call, rather than trying to format JSON inside free-form text.
+
+### Parameters (conceptual)
+
+- `session_id` (optional): defaults to **current chat session** from agent context
+- `general_caption` (`string | null`)
+- `media` (`array` of items):
+  - `name` (`string | null`)
+  - `cam` (`object | null`) including `cam_id` when applicable
+  - `timestamps` (`string | object | null`)
+  - `caption` (`string | null`)
+  - `path` (`string`) — must be browser-accessible URL/path
+  - `type` (`string`) — extension (`jpeg`, `mp4`, etc.)
+- Optional routing flags:
+  - `deliver_to_dashboard` (`bool`, default true)
+  - `deliver_to_telegram` (`bool`, default true if agent/channel is telegram)
+
+### Behavior
+
+- **Persist** an `assistant_media` message into the current session history.
+- **Dashboard**:
+  - Primary delivery mechanism is that the UI reads history and renders the media message.
+  - Optional improvement: also return the full structured message in the `/send` response so UI can render immediately without polling/refresh.
+- **Telegram**:
+  - Convert each media item to the appropriate Telegram attachment call.
+  - Use per-item caption when available, else fall back to `general_caption`.
+
+### Tool return value
+
+Return a simple acknowledgement string suitable for the LLM, e.g.:
+
+- `"Delivered 3 media item(s) to session <session_id>."`
+
+This allows the main assistant text response to stay minimal (or even empty), while the UI receives the media content via persisted message history / channel delivery.
 
 ## Telegram Adapter Plan
 
@@ -275,6 +318,10 @@ Example: “when did you see my dog last” → returns images/video clips + met
 
 - MUST produce a message with `role="assistant_media"` and `content` matching the canonical schema.
 - Should also include normal message metadata (source, timestamps).
+
+### Output mechanism (preferred)
+
+- `query_record` should internally call (or share code with) `deliver_media_message` so the AI/tooling doesn’t have to “manually” format or persist media messages.
 
 ### Implementation plan (phased)
 

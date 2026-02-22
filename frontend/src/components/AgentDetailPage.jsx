@@ -2,6 +2,7 @@ import { authFetch } from '../App'
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { ArrowLeft, Bot, Send, Plus, Loader2, MessageCircle, Clock, RefreshCw, Hash } from 'lucide-react'
 import ChatMarkdown from './ChatMarkdown'
+import ChatMedia from './ChatMedia'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
@@ -31,6 +32,12 @@ function formatTime(iso) {
 function formatTimestamp(iso) {
   if (!iso) return ''
   return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+const isMediaMessage = (msg) => {
+  if (!msg) return false
+  if (msg.role === 'assistant_media' || msg.role === 'user_media') return true
+  return typeof msg.content === 'object' && msg.content && Array.isArray(msg.content.media)
 }
 
 export default function AgentDetailPage({ agentId, onBack }) {
@@ -336,7 +343,11 @@ export default function AgentDetailPage({ agentId, onBack }) {
                           {msg.source_user && <span className="text-[10px] text-gray-400">@{msg.source_user}</span>}
                           <span className="text-[10px] text-gray-500">{formatTimestamp(msg.created_at)}</span>
                         </div>
-                        <ChatMarkdown content={msg.content} isUser={msg.role === 'user'} />
+                        {isMediaMessage(msg) ? (
+                          <ChatMedia content={msg.content} apiUrl={API_URL} />
+                        ) : (
+                          <ChatMarkdown content={typeof msg.content === 'string' ? msg.content : ''} isUser={msg.role === 'user'} />
+                        )}
                         {msg.prompt_tokens && (
                           <p className="text-[10px] text-gray-500 mt-1">
                             {msg.prompt_tokens + (msg.completion_tokens || 0)} tokens

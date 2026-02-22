@@ -319,6 +319,36 @@ TOOLS_REGISTRY = {
         },
         "handler": "app.tools.handlers.send_media",
     },
+    "deliver_media_message": {
+        "name": "deliver_media_message",
+        "description": "Deliver media files as a structured chat message. Use this to send images/videos/audio/files to the user in-chat. Provide 'general_caption' and a 'media' array of items (each with path/type and optional metadata). This persists an assistant_media message to the current session and routes attachments to Telegram/dashboard as appropriate.",
+        "category": "messaging",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Override session id (optional; defaults to current session)"},
+                "general_caption": {"type": "string", "description": "Caption for the whole media set (optional)"},
+                "media": {
+                    "type": "array",
+                    "description": "List of media items to deliver",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Display name (optional)"},
+                            "cam": {"type": "object", "description": "Camera metadata (optional)"},
+                            "timestamps": {"type": "string", "description": "Timestamp(s) for the media (optional)"},
+                            "caption": {"type": "string", "description": "Per-item caption (optional)"},
+                            "path": {"type": "string", "description": "Shared filesystem path (e.g. snapshots/foo.jpg)"},
+                            "type": {"type": "string", "description": "File extension/type (e.g. jpeg, mp4)"},
+                        },
+                        "required": ["path", "type"],
+                    },
+                },
+            },
+            "required": ["media"],
+        },
+        "handler": "app.tools.handlers.deliver_media_message",
+    },
     "file_delete": {
         "name": "delete_file",
         "description": "Delete a file from the shared agent filesystem.",

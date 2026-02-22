@@ -4,7 +4,7 @@ import os
 import uuid
 import logging
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Any
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +13,7 @@ from pydantic import BaseModel
 import httpx
 
 from app.database import get_db
-from app.models.agent import Agent, AgentChatMessage
+from app.models.agent import Agent, AgentChatMessage, MEDIA_ROLES
 from app.tools.registry import get_tools_for_agent
 from app.config import get_settings
 
@@ -22,6 +22,55 @@ router = APIRouter(prefix="/api/chat", tags=["agent-chat"])
 settings = get_settings()
 
 _session_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+def _summarize_media_content(content: dict) -> str:
+    """Convert structured media payload into a short text summary for LLM context."""
+    if not isinstance(content, dict):
+        return "(media)"
+    lines: list[str] = []
+    general = content.get("general_caption")
+    if general:
+        lines.append(f"Media caption: {general}")
+    media = content.get("media") or []
+    if not isinstance(media, list) or not media:
+        lines.append("Media: (no items)")
+        return "\n".join(lines)
+    lines.append(f"Media items: {len(media)}")
+    for i, item in enumerate(media[:20], start=1):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        mtype = item.get("type")
+        path = item.get("path")
+        caption = item.get("caption")
+        timestamps = item.get("timestamps")
+        cam = item.get("cam") if isinstance(item.get("cam"), dict) else None
+        cam_part = ""
+        if cam:
+            cam_name = cam.get("name") or cam.get("cam_id")
+            cam_loc = cam.get("location")
+            cam_part = f" | cam={cam_name}" + (f" ({cam_loc})" if cam_loc else "")
+        ts_part = f" | time={timestamps}" if timestamps else ""
+        cap_part = f" | caption={caption}" if caption else ""
+        nm_part = f"{name} " if name else ""
+        lines.append(f"{i}. {nm_part}{mtype or 'file'} @ {path}{cam_part}{ts_part}{cap_part}")
+    if len(media) > 20:
+        lines.append(f"... {len(media) - 20} more item(s)")
+    return "\n".join(lines)
+
+
+def _coerce_role_for_llm(role: str) -> str:
+    if role == "assistant_media":
+        return "assistant"
+    if role == "user_media":
+        return "user"
+    return role
+
+
+def _coerce_content_for_llm(msg: AgentChatMessage) -> str:
+    if msg.content_type == "media" or msg.role in MEDIA_ROLES:
+        return _summarize_media_content(msg.content_media or {})
+    return msg.content_text if msg.content_text is not None else (msg.content or "")
 
 
 class SendMessage(BaseModel):
@@ -42,7 +91,7 @@ class SendResponse(BaseModel):
 class SaveMessageRequest(BaseModel):
     session_id: str
     role: str
-    content: str
+    content: Any
     source: str = "agent"
     source_user: Optional[str] = None
     prompt_tokens: Optional[int] = None
@@ -99,6 +148,9 @@ async def send_message(
             source=data.source,
             source_user=data.source_user,
         )
+        user_msg.content_type = "text"
+        user_msg.content_text = data.message
+        user_msg.content_media = None
         db.add(user_msg)
         await db.flush()
 
@@ -126,7 +178,10 @@ async def send_message(
         )
         history = history_result.scalars().all()
         for msg in history:
-            llm_messages.append({"role": msg.role, "content": msg.content})
+            llm_messages.append({
+                "role": _coerce_role_for_llm(msg.role),
+                "content": _coerce_content_for_llm(msg),
+            })
 
         resolved_key = agent.api_key_ref or ""
         if not resolved_key:
@@ -183,6 +238,9 @@ async def send_message(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        assistant_msg.content_type = "text"
+        assistant_msg.content_text = response_text
+        assistant_msg.content_media = None
         db.add(assistant_msg)
         await db.commit()
 
@@ -218,12 +276,25 @@ async def save_message_endpoint(
         agent_id=agent_id,
         session_id=data.session_id,
         role=data.role,
-        content=data.content,
+        content="" if (data.role in MEDIA_ROLES and isinstance(data.content, dict)) else str(data.content),
         source=data.source,
         source_user=data.source_user,
         prompt_tokens=data.prompt_tokens,
         completion_tokens=data.completion_tokens,
     )
+    # Populate typed content fields
+    if data.role in MEDIA_ROLES:
+        if not isinstance(data.content, dict):
+            raise HTTPException(status_code=400, detail="content must be an object for media roles")
+        msg.content_type = "media"
+        msg.content_media = data.content
+        msg.content_text = _summarize_media_content(data.content)
+        # Keep legacy content column non-null
+        msg.content = msg.content_text or ""
+    else:
+        msg.content_type = "text"
+        msg.content_text = str(data.content)
+        msg.content_media = None
     db.add(msg)
     await db.commit()
     return {"status": "saved"}

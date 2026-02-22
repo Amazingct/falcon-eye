@@ -15,6 +15,7 @@ import httpx
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 import uvicorn
+from datetime import datetime
 
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
@@ -207,13 +208,52 @@ async def fetch_history(session_id: str) -> list[dict]:
             )
             if res.status_code == 200:
                 data = res.json()
-                return [{"role": m["role"], "content": m["content"]} for m in data.get("messages", [])]
+                return [_coerce_history_message_for_llm(m) for m in data.get("messages", [])]
     except Exception as e:
         logger.error(f"Failed to fetch history: {e}")
     return []
 
 
-async def save_message(session_id: str, role: str, content: str, source: str,
+def _summarize_media_content(content: dict) -> str:
+    if not isinstance(content, dict):
+        return "(media)"
+    general = content.get("general_caption")
+    media = content.get("media") or []
+    lines: list[str] = []
+    if general:
+        lines.append(f"Media caption: {general}")
+    if isinstance(media, list) and media:
+        lines.append(f"Media items: {len(media)}")
+        for i, item in enumerate(media[:20], start=1):
+            if not isinstance(item, dict):
+                continue
+            lines.append(f"{i}. {item.get('type','file')} @ {item.get('path')}")
+    else:
+        lines.append("Media: (no items)")
+    return "\n".join(lines)
+
+
+def _coerce_role_for_llm(role: str) -> str:
+    if role == "assistant_media":
+        return "assistant"
+    if role == "user_media":
+        return "user"
+    return role
+
+
+def _coerce_history_message_for_llm(m: dict) -> dict:
+    role = _coerce_role_for_llm(m.get("role", "user"))
+    content = m.get("content", "")
+    if isinstance(content, dict) or m.get("role") in ("assistant_media", "user_media"):
+        content = _summarize_media_content(content if isinstance(content, dict) else {})
+    elif content is None:
+        content = ""
+    elif not isinstance(content, str):
+        content = str(content)
+    return {"role": role, "content": content}
+
+
+async def save_message(session_id: str, role: str, content, source: str,
                        source_user: str | None = None,
                        prompt_tokens: int | None = None,
                        completion_tokens: int | None = None):
@@ -307,6 +347,20 @@ async def download_file(path: str) -> bytes | None:
     return None
 
 
+async def upload_file(path: str, file_bytes: bytes, filename: str, mime_type: str = "application/octet-stream") -> bool:
+    """Upload binary content into the shared filesystem via the API."""
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            res = await client.post(
+                f"{API_URL}/api/files/upload/{path}",
+                files={"file": (filename, file_bytes, mime_type)},
+            )
+            return res.status_code == 200
+    except Exception as e:
+        logger.error(f"Failed to upload file {path}: {e}")
+        return False
+
+
 # ─── Telegram Bot ───────────────────────────────────────────
 
 telegram_app = None
@@ -373,7 +427,7 @@ async def start_telegram_bot():
             await chat.send_message(f"(failed to send {os.path.basename(file_path)}: {e})")
 
     async def handle_message(update: Update, context):
-        if not update.message or not update.message.text:
+        if not update.message:
             return
         chat_id = update.effective_chat.id
         user = update.effective_user
@@ -382,12 +436,87 @@ async def start_telegram_bot():
             chat_sessions[chat_id] = str(uuid.uuid4())
         session_id = chat_sessions[chat_id]
         asyncio.ensure_future(persist_chat_id(chat_id))
-        await update.message.chat.send_action("typing")
 
-        result = await process_message(
-            update.message.text, session_id=session_id,
-            source="telegram", source_user=source_user,
-        )
+        # 1) Text messages (existing path)
+        if update.message.text:
+            await update.message.chat.send_action("typing")
+            result = await process_message(
+                update.message.text, session_id=session_id,
+                source="telegram", source_user=source_user,
+            )
+            response_text = result.get("response", "")
+            media_items = result.get("media", [])
+            if response_text:
+                for i in range(0, len(response_text), 4000):
+                    await update.message.reply_text(response_text[i:i + 4000])
+            for item in media_items:
+                await send_media_to_chat(update.effective_chat, item, context.bot)
+            return
+
+        # 2) Attachments -> user_media
+        attachment = None
+        filename = None
+        mime_type = "application/octet-stream"
+
+        if update.message.photo:
+            attachment = update.message.photo[-1]
+            filename = f"photo_{attachment.file_id}.jpg"
+            mime_type = "image/jpeg"
+        elif update.message.video:
+            attachment = update.message.video
+            filename = getattr(attachment, "file_name", None) or f"video_{attachment.file_id}.mp4"
+            mime_type = getattr(attachment, "mime_type", None) or "video/mp4"
+        elif update.message.audio:
+            attachment = update.message.audio
+            filename = getattr(attachment, "file_name", None) or f"audio_{attachment.file_id}.mp3"
+            mime_type = getattr(attachment, "mime_type", None) or "audio/mpeg"
+        elif update.message.document:
+            attachment = update.message.document
+            filename = getattr(attachment, "file_name", None) or f"file_{attachment.file_id}"
+            mime_type = getattr(attachment, "mime_type", None) or "application/octet-stream"
+
+        if not attachment:
+            return
+
+        try:
+            tg_file = await context.bot.get_file(attachment.file_id)
+            file_bytes = await tg_file.download_as_bytearray()
+        except Exception as e:
+            logger.error(f"Failed to download Telegram attachment: {e}")
+            await update.message.reply_text("(Failed to download attachment.)")
+            return
+
+        # Store under shared filesystem
+        safe_name = "".join(c if c.isalnum() or c in ("-", "_", ".", " ") else "_" for c in (filename or "file"))
+        safe_name = safe_name.strip().replace(" ", "_")[:120] or "file"
+        dest_path = f"uploads/telegram/{session_id}/{uuid.uuid4().hex[:8]}_{safe_name}"
+        ok = await upload_file(dest_path, bytes(file_bytes), safe_name, mime_type=mime_type)
+        if not ok:
+            await update.message.reply_text("(Failed to upload attachment to server.)")
+            return
+
+        ext = os.path.splitext(safe_name)[1].lower().lstrip(".") or "bin"
+        caption = update.message.caption if getattr(update.message, "caption", None) else None
+        user_media_payload = {
+            "general_caption": caption,
+            "media": [
+                {
+                    "name": safe_name,
+                    "cam": None,
+                    "timestamps": datetime.utcnow().isoformat() + "Z",
+                    "caption": caption,
+                    "path": dest_path,
+                    "type": ext,
+                }
+            ],
+        }
+
+        await save_message(session_id, "user_media", user_media_payload, "telegram", source_user=source_user)
+
+        # Optional: trigger an AI reply using caption or a short summary
+        prompt = caption or f"I sent you an attachment: {safe_name} ({ext})"
+        await update.message.chat.send_action("typing")
+        result = await process_message(prompt, session_id=session_id, source="telegram", source_user=source_user)
         response_text = result.get("response", "")
         media_items = result.get("media", [])
         if response_text:
@@ -411,7 +540,8 @@ async def start_telegram_bot():
     telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", handle_start))
     telegram_app.add_handler(CommandHandler("new", handle_new_session))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Handle both text and attachments (photos/videos/documents/audio)
+    telegram_app.add_handler(MessageHandler(~filters.COMMAND, handle_message))
 
     logger.info("Starting Telegram bot polling...")
     max_retries = 10
