@@ -1,7 +1,7 @@
 """Falcon-Eye Camera Manager - FastAPI Application"""
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -14,8 +14,10 @@ from app.routes.agent_chat import router as agent_chat_router
 from app.routes.cron_routes import router as cron_router
 from app.routes.tools import router as tools_router
 from app.routes.files import router as files_router
+from app.routes.auth import router as auth_router
 from app.chatbot import router as chatbot_router
 from app.models.schemas import HealthResponse
+from app.auth import require_auth
 
 settings = get_settings()
 
@@ -84,17 +86,20 @@ async def health_check():
     )
 
 
-# Include routers
-app.include_router(cameras.router)
-app.include_router(nodes.router)
-app.include_router(recordings.router)
-app.include_router(settings_routes.router)
-app.include_router(agents_router)
-app.include_router(agent_chat_router)
-app.include_router(cron_router)
-app.include_router(tools_router)
-app.include_router(files_router)
-app.include_router(chatbot_router)
+# Auth router (public - no auth required)
+app.include_router(auth_router)
+
+# Protected routers - all require authentication
+app.include_router(cameras.router, dependencies=[Depends(require_auth)])
+app.include_router(nodes.router, dependencies=[Depends(require_auth)])
+app.include_router(recordings.router, dependencies=[Depends(require_auth)])
+app.include_router(settings_routes.router, dependencies=[Depends(require_auth)])
+app.include_router(agents_router, dependencies=[Depends(require_auth)])
+app.include_router(agent_chat_router, dependencies=[Depends(require_auth)])
+app.include_router(cron_router, dependencies=[Depends(require_auth)])
+app.include_router(tools_router, dependencies=[Depends(require_auth)])
+app.include_router(files_router, dependencies=[Depends(require_auth)])
+app.include_router(chatbot_router, dependencies=[Depends(require_auth)])
 
 
 # Exception handlers

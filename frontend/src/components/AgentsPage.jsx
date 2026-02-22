@@ -1,3 +1,4 @@
+import { authFetch } from '../App'
 import React, { useState, useEffect } from 'react'
 import { Bot, Plus, Trash2, Play, Square, Edit, RefreshCw, Loader2, Save, X, AlertCircle, CheckCircle, Settings } from 'lucide-react'
 
@@ -12,7 +13,7 @@ export default function AgentsPage({ onSelectAgent }) {
 
   const fetchAgents = async () => {
     try {
-      const res = await fetch(`${API_URL}/agents/`)
+      const res = await authFetch(`${API_URL}/agents/`)
       if (!res.ok) throw new Error('Failed to fetch agents')
       const data = await res.json()
       setAgents(data.agents || [])
@@ -39,7 +40,7 @@ export default function AgentsPage({ onSelectAgent }) {
   const deleteAgent = async (id) => {
     if (!confirm('Delete this agent and all its data?')) return
     try {
-      await fetch(`${API_URL}/agents/${id}`, { method: 'DELETE' })
+      await authFetch(`${API_URL}/agents/${id}`, { method: 'DELETE' })
       fetchAgents()
     } catch (err) {
       setError(err.message)
@@ -48,7 +49,7 @@ export default function AgentsPage({ onSelectAgent }) {
 
   const startAgent = async (id) => {
     try {
-      await fetch(`${API_URL}/agents/${id}/start`, { method: 'POST' })
+      await authFetch(`${API_URL}/agents/${id}/start`, { method: 'POST' })
       fetchAgents()
     } catch (err) {
       setError(err.message)
@@ -57,7 +58,7 @@ export default function AgentsPage({ onSelectAgent }) {
 
   const stopAgent = async (id) => {
     try {
-      await fetch(`${API_URL}/agents/${id}/stop`, { method: 'POST' })
+      await authFetch(`${API_URL}/agents/${id}/stop`, { method: 'POST' })
       fetchAgents()
     } catch (err) {
       setError(err.message)
@@ -215,7 +216,7 @@ function AgentModal({ agent, onClose, onSave }) {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    fetch(`${API_URL}/tools/`).then(r => r.json()).then(d => setAllTools(d.tools || {})).catch(() => {})
+    authFetch(`${API_URL}/tools/`).then(r => r.json()).then(d => setAllTools(d.tools || {})).catch(() => {})
   }, [])
 
   const autoSlug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)
@@ -242,7 +243,7 @@ function AgentModal({ agent, onClose, onSave }) {
 
     try {
       if (isEdit) {
-        const res = await fetch(`${API_URL}/agents/${agent.id}`, {
+        const res = await authFetch(`${API_URL}/agents/${agent.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -253,7 +254,7 @@ function AgentModal({ agent, onClose, onSave }) {
         }
       } else {
         payload.slug = form.slug || autoSlug(form.name)
-        const res = await fetch(`${API_URL}/agents/`, {
+        const res = await authFetch(`${API_URL}/agents/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),

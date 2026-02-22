@@ -1,3 +1,4 @@
+import { authFetch } from '../App'
 import React, { useState, useEffect, useRef } from 'react'
 import { MessageCircle, Send, Plus, RefreshCw, Loader2, Bot, ChevronDown } from 'lucide-react'
 import ChatMarkdown from './ChatMarkdown'
@@ -17,7 +18,7 @@ export default function AgentChat() {
 
   // Fetch agents
   useEffect(() => {
-    fetch(`${API_URL}/agents/`).then(r => r.json()).then(d => {
+    authFetch(`${API_URL}/agents/`).then(r => r.json()).then(d => {
       const agentList = d.agents || []
       setAgents(agentList)
       if (agentList.length > 0 && !selectedAgent) setSelectedAgent(agentList[0])
@@ -27,7 +28,7 @@ export default function AgentChat() {
   // Fetch sessions when agent changes
   useEffect(() => {
     if (!selectedAgent) return
-    fetch(`${API_URL}/chat/${selectedAgent.id}/sessions`).then(r => r.json()).then(d => {
+    authFetch(`${API_URL}/chat/${selectedAgent.id}/sessions`).then(r => r.json()).then(d => {
       setSessions(d.sessions || [])
     }).catch(() => {})
   }, [selectedAgent])
@@ -36,7 +37,7 @@ export default function AgentChat() {
   useEffect(() => {
     if (!selectedAgent || !selectedSession) { setMessages([]); return }
     setLoading(true)
-    fetch(`${API_URL}/chat/${selectedAgent.id}/history?session_id=${selectedSession}&limit=100`)
+    authFetch(`${API_URL}/chat/${selectedAgent.id}/history?session_id=${selectedSession}&limit=100`)
       .then(r => r.json())
       .then(d => setMessages(d.messages || []))
       .catch(() => {})
@@ -50,7 +51,7 @@ export default function AgentChat() {
   const createNewSession = async () => {
     if (!selectedAgent) return
     try {
-      const res = await fetch(`${API_URL}/chat/${selectedAgent.id}/sessions/new`, { method: 'POST' })
+      const res = await authFetch(`${API_URL}/chat/${selectedAgent.id}/sessions/new`, { method: 'POST' })
       if (res.ok) {
         const data = await res.json()
         setSelectedSession(data.session_id)
@@ -66,7 +67,7 @@ export default function AgentChat() {
     let sessionId = selectedSession
     if (!sessionId) {
       try {
-        const res = await fetch(`${API_URL}/chat/${selectedAgent.id}/sessions/new`, { method: 'POST' })
+        const res = await authFetch(`${API_URL}/chat/${selectedAgent.id}/sessions/new`, { method: 'POST' })
         if (res.ok) {
           const data = await res.json()
           sessionId = data.session_id
@@ -82,7 +83,7 @@ export default function AgentChat() {
     setSendingMsg(true)
 
     try {
-      const res = await fetch(`${API_URL}/chat/${selectedAgent.id}/send`, {
+      const res = await authFetch(`${API_URL}/chat/${selectedAgent.id}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg.content, session_id: sessionId, source: 'dashboard' }),

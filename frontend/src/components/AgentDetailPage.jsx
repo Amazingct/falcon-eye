@@ -1,3 +1,4 @@
+import { authFetch } from '../App'
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { ArrowLeft, Bot, Send, Plus, Loader2, MessageCircle, Clock, RefreshCw, Hash } from 'lucide-react'
 import ChatMarkdown from './ChatMarkdown'
@@ -52,7 +53,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
   }, [])
 
   useEffect(() => {
-    fetch(`${API_URL}/agents/${agentId}`)
+    authFetch(`${API_URL}/agents/${agentId}`)
       .then(r => r.json())
       .then(setAgent)
       .catch(() => {})
@@ -61,7 +62,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/chat/${agentId}/sessions`)
+      const res = await authFetch(`${API_URL}/chat/${agentId}/sessions`)
       const data = await res.json()
       setSessions(data.sessions || [])
     } catch {}
@@ -75,7 +76,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
     if (!sessionId) return
     if (!opts.silent) setLoadingMessages(true)
     try {
-      const res = await fetch(`${API_URL}/chat/${agentId}/history?session_id=${sessionId}&limit=200`)
+      const res = await authFetch(`${API_URL}/chat/${agentId}/history?session_id=${sessionId}&limit=200`)
       const data = await res.json()
       const msgs = data.messages || []
       if (opts.silent && msgs.length === messageCountRef.current) return
@@ -111,7 +112,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
 
   const createNewSession = async () => {
     try {
-      const res = await fetch(`${API_URL}/chat/${agentId}/sessions/new`, { method: 'POST' })
+      const res = await authFetch(`${API_URL}/chat/${agentId}/sessions/new`, { method: 'POST' })
       if (res.ok) {
         const data = await res.json()
         setSelectedSession(data.session_id)
@@ -133,7 +134,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
     let sessionId = selectedSession
     if (!sessionId) {
       try {
-        const res = await fetch(`${API_URL}/chat/${agentId}/sessions/new`, { method: 'POST' })
+        const res = await authFetch(`${API_URL}/chat/${agentId}/sessions/new`, { method: 'POST' })
         if (res.ok) {
           const data = await res.json()
           sessionId = data.session_id
@@ -155,7 +156,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
     setSending(true)
 
     try {
-      const res = await fetch(`${API_URL}/chat/${agentId}/send`, {
+      const res = await authFetch(`${API_URL}/chat/${agentId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg.content, session_id: sessionId, source: 'dashboard' }),

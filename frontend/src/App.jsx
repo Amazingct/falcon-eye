@@ -1,15 +1,113 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight, Key, Server, Bot, ArrowLeft, AlertTriangle, Network } from 'lucide-react'
+import { Camera, Plus, Trash2, RefreshCw, Settings, Grid, List, Play, Pause, AlertCircle, CheckCircle, Wifi, WifiOff, Edit, Search, Loader2, Save, RotateCcw, MessageCircle, Send, X, PanelRightOpen, PanelRightClose, Circle, Video, Square, Film, Clock, Download, ChevronDown, ChevronRight, Key, Server, Bot, ArrowLeft, AlertTriangle, Network, LogOut, Eye, EyeOff, Shield } from 'lucide-react'
 import AgentsPage from './components/AgentsPage'
 import CronJobsPage from './components/CronJobsPage'
 import AgentChat from './components/AgentChat'
 import AgentDetailPage from './components/AgentDetailPage'
 import CronExpressionBuilder from './components/CronExpressionBuilder'
 import ChatMarkdown from './components/ChatMarkdown'
+import { SetupPage, LoginPage } from './components/AuthPages'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
 
+// Auth token management
+let _authToken = localStorage.getItem('falcon_eye_token')
+let _onAuthFailure = null
+
+export function getAuthToken() { return _authToken }
+
+export function authFetch(url, options = {}) {
+  const headers = { ...(options.headers || {}) }
+  if (_authToken) {
+    headers['Authorization'] = `Bearer ${_authToken}`
+  }
+  return fetch(url, { ...options, headers }).then(res => {
+    if (res.status === 401 && _onAuthFailure) {
+      _onAuthFailure()
+    }
+    return res
+  })
+}
+
+// Append token to URL for <img src> tags
+export function authUrl(url) {
+  if (!_authToken || !url) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(_authToken)}`
+}
+
 function App() {
+  const [authState, setAuthState] = useState('loading') // loading, setup, login, authenticated
+  const [authUser, setAuthUser] = useState(null)
+
+  const handleAuth = (token, username) => {
+    _authToken = token
+    localStorage.setItem('falcon_eye_token', token)
+    setAuthUser(username)
+    setAuthState('authenticated')
+  }
+
+  const handleLogout = () => {
+    _authToken = null
+    localStorage.removeItem('falcon_eye_token')
+    setAuthUser(null)
+    setAuthState('login')
+  }
+
+  _onAuthFailure = handleLogout
+
+  // Check auth status on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const headers = _authToken ? { 'Authorization': `Bearer ${_authToken}` } : {}
+        const res = await fetch(`${API_URL}/auth/status`, { headers })
+        const data = await res.json()
+        if (!data.setup_complete) {
+          setAuthState('setup')
+        } else if (data.authenticated) {
+          setAuthUser(data.username)
+          setAuthState('authenticated')
+        } else {
+          localStorage.removeItem('falcon_eye_token')
+          _authToken = null
+          setAuthState('login')
+        }
+      } catch {
+        // API down - show login anyway
+        setAuthState('login')
+      }
+    }
+    checkAuth()
+  }, [])
+
+  // Auto-logout timer: check token expiry every minute
+  useEffect(() => {
+    if (authState !== 'authenticated') return
+    const interval = setInterval(async () => {
+      try {
+        const res = await authFetch(`${API_URL}/auth/status`)
+        const data = await res.json()
+        if (!data.authenticated) handleLogout()
+      } catch {}
+    }, 60000)
+    return () => clearInterval(interval)
+  }, [authState])
+
+  if (authState === 'loading') {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+      </div>
+    )
+  }
+  if (authState === 'setup') return <SetupPage onAuth={handleAuth} />
+  if (authState === 'login') return <LoginPage onAuth={handleAuth} />
+
+  return <Dashboard authUser={authUser} onLogout={handleLogout} />
+}
+
+function Dashboard({ authUser, onLogout }) {
   const [cameras, setCameras] = useState([])
   const [nodes, setNodes] = useState([])
   const [loading, setLoading] = useState(true)
@@ -27,7 +125,7 @@ function App() {
   // Fetch cameras
   const fetchCameras = async () => {
     try {
-      const res = await fetch(`${API_URL}/cameras/`)
+      const res = await authFetch(`${API_URL}/cameras/`)
       if (!res.ok) throw new Error('Failed to fetch cameras')
       const data = await res.json()
       setCameras(data.cameras || [])
@@ -39,7 +137,7 @@ function App() {
   // Fetch nodes
   const fetchNodes = async () => {
     try {
-      const res = await fetch(`${API_URL}/nodes/`)
+      const res = await authFetch(`${API_URL}/nodes/`)
       if (!res.ok) throw new Error('Failed to fetch nodes')
       const data = await res.json()
       setNodes(data)
@@ -73,7 +171,7 @@ function App() {
   const deleteCamera = async (id) => {
     if (!confirm('Are you sure you want to delete this camera?')) return
     try {
-      await fetch(`${API_URL}/cameras/${id}`, { method: 'DELETE' })
+      await authFetch(`${API_URL}/cameras/${id}`, { method: 'DELETE' })
       fetchCameras()
     } catch (err) {
       setError(err.message)
@@ -84,7 +182,7 @@ function App() {
   const toggleCamera = async (camera) => {
     try {
       const action = camera.status === 'running' ? 'stop' : 'start'
-      await fetch(`${API_URL}/cameras/${camera.id}/${action}`, { method: 'POST' })
+      await authFetch(`${API_URL}/cameras/${camera.id}/${action}`, { method: 'POST' })
       fetchCameras()
     } catch (err) {
       setError(err.message)
@@ -94,7 +192,7 @@ function App() {
   // Restart camera
   const restartCamera = async (camera) => {
     try {
-      await fetch(`${API_URL}/cameras/${camera.id}/restart`, { method: 'POST' })
+      await authFetch(`${API_URL}/cameras/${camera.id}/restart`, { method: 'POST' })
       fetchCameras()
     } catch (err) {
       setError(err.message)
@@ -175,6 +273,13 @@ function App() {
                 title="Settings"
               >
                 <Settings className="h-5 w-5" />
+              </button>
+              <button
+                onClick={onLogout}
+                className="p-2 hover:bg-gray-700 rounded-lg transition text-gray-400 hover:text-red-400"
+                title={`Logout (${authUser})`}
+              >
+                <LogOut className="h-5 w-5" />
               </button>
             </div>
           </div>
@@ -442,7 +547,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
       const runningCameras = cameras.filter(c => c.status === 'running')
       for (const cam of runningCameras) {
         try {
-          const res = await fetch(`${API_URL}/cameras/${cam.id}/recording/status`)
+          const res = await authFetch(`${API_URL}/cameras/${cam.id}/recording/status`)
           if (res.ok) {
             const data = await res.json()
             setRecordingStatus(prev => ({ ...prev, [cam.id]: data }))
@@ -459,7 +564,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
 
   const startRecording = async (camera) => {
     try {
-      const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/start`, { method: 'POST' })
+      const res = await authFetch(`${API_URL}/cameras/${camera.id}/recording/start`, { method: 'POST' })
       const data = await res.json()
       if (res.ok) {
         setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
@@ -473,7 +578,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
 
   const stopRecording = async (camera) => {
     try {
-      const res = await fetch(`${API_URL}/cameras/${camera.id}/recording/stop`, { method: 'POST' })
+      const res = await authFetch(`${API_URL}/cameras/${camera.id}/recording/stop`, { method: 'POST' })
       const data = await res.json()
       if (res.ok) {
         setRecordingStatus(prev => ({ ...prev, [camera.id]: data.recording || data }))
@@ -504,7 +609,7 @@ function CameraGrid({ cameras, onDelete, onToggle, onSelect, onEdit, onRestart, 
           >
             {camera.status === 'running' ? (
               <img
-                src={camera.stream_url}
+                src={authUrl(camera.stream_url)}
                 alt={camera.name}
                 className="w-full h-full object-cover"
                 onError={(e) => {
@@ -793,7 +898,7 @@ function AddCameraModal({ nodes, onClose, onAdd }) {
         payload.source_url = form.source
       }
 
-      const res = await fetch(`${API_URL}/cameras/`, {
+      const res = await authFetch(`${API_URL}/cameras/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -923,7 +1028,7 @@ function CameraPreviewModal({ camera, onClose }) {
           <div className="aspect-video bg-black">
             {camera.status === 'running' ? (
               <img
-                src={camera.stream_url}
+                src={authUrl(camera.stream_url)}
                 alt={camera.name}
                 className="w-full h-full object-contain"
               />
@@ -967,7 +1072,7 @@ function EditCameraModal({ camera, onClose, onSave }) {
         delete payload.source_url
       }
       
-      const res = await fetch(`${API_URL}/cameras/${camera.id}`, {
+      const res = await authFetch(`${API_URL}/cameras/${camera.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1111,7 +1216,7 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
     
     try {
       // Always scan network + USB
-      const res = await fetch(`${API_URL}/nodes/scan/cameras?network=true`)
+      const res = await authFetch(`${API_URL}/nodes/scan/cameras?network=true`)
       if (!res.ok) throw new Error('Scan failed')
       const data = await res.json()
       setCameras(data.cameras || [])
@@ -1179,7 +1284,7 @@ function ScanCamerasModal({ nodes, onClose, onAdded }) {
     
     for (const camera of toAdd) {
       try {
-        const res = await fetch(`${API_URL}/cameras/`, {
+        const res = await authFetch(`${API_URL}/cameras/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(camera),
@@ -1348,7 +1453,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const res = await fetch(`${API_URL}/settings/`)
+        const res = await authFetch(`${API_URL}/settings/`)
         if (!res.ok) throw new Error('Failed to fetch settings')
         const data = await res.json()
         setSettings(data)
@@ -1378,7 +1483,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
     setMessage(null)
     try {
       const payload = fields || form
-      const res = await fetch(`${API_URL}/settings/`, {
+      const res = await authFetch(`${API_URL}/settings/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1403,7 +1508,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
     setError(null)
     setMessage(null)
     try {
-      const res = await fetch(`${API_URL}/settings/restart-all`, { method: 'POST' })
+      const res = await authFetch(`${API_URL}/settings/restart-all`, { method: 'POST' })
       if (!res.ok) throw new Error('Failed to restart')
       const data = await res.json()
       setMessage(`${data.message}: ${data.restarted.join(', ')}`)
@@ -1420,7 +1525,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
     setClearing(true)
     setError(null)
     try {
-      const res = await fetch(`${API_URL}/settings/cameras/all`, { method: 'DELETE' })
+      const res = await authFetch(`${API_URL}/settings/cameras/all`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed to clear cameras')
       const data = await res.json()
       setMessage(data.message)
@@ -1438,6 +1543,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
     { id: 'agents', label: 'Agents', icon: Bot, description: 'AI agents & API key' },
     { id: 'chatbot', label: 'Chatbot', icon: Bot, description: 'AI assistant tools' },
     { id: 'cron', label: 'Cron Jobs', icon: Clock, description: 'Scheduled tasks' },
+    { id: 'security', label: 'Security', icon: Shield, description: 'Login credentials' },
   ]
 
   return (
@@ -1856,6 +1962,10 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                 </div>
               )}
 
+              {activeSection === 'security' && (
+                <SecuritySection />
+              )}
+
               {activeSection === 'chatbot' && (
                 <div className="space-y-8">
                   <div>
@@ -1926,6 +2036,103 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
   )
 }
 
+// Security Settings Section
+function SecuritySection() {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newUsername, setNewUsername] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [showPasswords, setShowPasswords] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState(null)
+  const [error, setError] = useState(null)
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    setError(null)
+    setMessage(null)
+    if (newPassword && newPassword !== confirmPassword) {
+      setError('New passwords do not match')
+      return
+    }
+    if (!currentPassword) {
+      setError('Current password is required')
+      return
+    }
+    if (!newUsername && !newPassword) {
+      setError('Provide a new username or password')
+      return
+    }
+    setSaving(true)
+    try {
+      const body = { current_password: currentPassword }
+      if (newUsername) body.new_username = newUsername
+      if (newPassword) body.new_password = newPassword
+      const res = await authFetch(`${API_URL}/auth/credentials`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || 'Failed to update')
+      // Update token
+      _authToken = data.token
+      localStorage.setItem('falcon_eye_token', data.token)
+      setMessage('Credentials updated successfully')
+      setCurrentPassword('')
+      setNewUsername('')
+      setNewPassword('')
+      setConfirmPassword('')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-2xl font-bold">Security</h2>
+        <p className="text-gray-400 mt-1">Change your login credentials</p>
+      </div>
+      <form onSubmit={handleSave} className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4 max-w-lg">
+        {error && <div className="bg-red-500/20 border border-red-500/50 text-red-300 px-4 py-2 rounded-lg text-sm">{error}</div>}
+        {message && <div className="bg-green-500/20 border border-green-500/50 text-green-300 px-4 py-2 rounded-lg text-sm">{message}</div>}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Current Password *</label>
+          <input type={showPasswords ? 'text' : 'password'} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)}
+            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
+        </div>
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">New Username (leave blank to keep current)</label>
+          <input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)}
+            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
+        </div>
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">New Password (leave blank to keep current)</label>
+          <input type={showPasswords ? 'text' : 'password'} value={newPassword} onChange={e => setNewPassword(e.target.value)}
+            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
+        </div>
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Confirm New Password</label>
+          <input type={showPasswords ? 'text' : 'password'} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
+        </div>
+        <label className="flex items-center space-x-2 text-sm text-gray-400 cursor-pointer">
+          <input type="checkbox" checked={showPasswords} onChange={e => setShowPasswords(e.target.checked)} className="rounded" />
+          <span>Show passwords</span>
+        </label>
+        <button type="submit" disabled={saving}
+          className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-6 py-2.5 rounded-lg transition font-medium">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          <span>{saving ? 'Saving…' : 'Update Credentials'}</span>
+        </button>
+      </form>
+    </div>
+  )
+}
+
 // Chat Widget Component
 function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWidthChange }) {
   const [sessions, setSessions] = useState([])
@@ -1944,7 +2151,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   // Fetch sessions on mount
   const fetchSessions = async () => {
     try {
-      const res = await fetch(`${API_URL}/chat/sessions`)
+      const res = await authFetch(`${API_URL}/chat/sessions`)
       if (res.ok) {
         const data = await res.json()
         setSessions(data.sessions || [])
@@ -1978,7 +2185,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   useEffect(() => {
     const findMainAgent = async () => {
       try {
-        const res = await fetch(`${API_URL}/agents/`)
+        const res = await authFetch(`${API_URL}/agents/`)
         if (res.ok) {
           const data = await res.json()
           const main = (data.agents || []).find(a => a.slug === 'main')
@@ -2002,7 +2209,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
 
   const createNewSession = async () => {
     try {
-      const res = await fetch(`${API_URL}/chat/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const res = await authFetch(`${API_URL}/chat/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       if (res.ok) {
         const session = await res.json()
         setSessions(prev => [session, ...prev])
@@ -2017,7 +2224,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
 
   const loadSession = async (session) => {
     try {
-      const res = await fetch(`${API_URL}/chat/sessions/${session.id}`)
+      const res = await authFetch(`${API_URL}/chat/sessions/${session.id}`)
       if (res.ok) {
         const data = await res.json()
         setCurrentSession(data)
@@ -2032,7 +2239,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   const deleteSession = async (sessionId) => {
     if (!confirm('Delete this chat?')) return
     try {
-      await fetch(`${API_URL}/chat/sessions/${sessionId}`, { method: 'DELETE' })
+      await authFetch(`${API_URL}/chat/sessions/${sessionId}`, { method: 'DELETE' })
       setSessions(prev => prev.filter(s => s.id !== sessionId))
       if (currentSession?.id === sessionId) {
         setCurrentSession(null)
@@ -2046,7 +2253,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   const renameSession = async (sessionId) => {
     if (!newName.trim()) return
     try {
-      const res = await fetch(`${API_URL}/chat/sessions/${sessionId}`, {
+      const res = await authFetch(`${API_URL}/chat/sessions/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newName.trim() })
@@ -2072,7 +2279,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
     setIsLoading(true)
 
     try {
-      const res = await fetch(`${API_URL}/chat/${mainAgentId}/send`, {
+      const res = await authFetch(`${API_URL}/chat/${mainAgentId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMessage.content, source: 'dashboard' }),
@@ -2213,7 +2420,7 @@ function RecordingsPage({ cameras }) {
     const fetchRecordings = async (isInitial) => {
       if (isInitial) setLoading(true)
       try {
-        const res = await fetch(`${API_URL}/recordings/`)
+        const res = await authFetch(`${API_URL}/recordings/`)
         if (res.ok && isMounted) {
           const data = await res.json()
           setRecordings(data.recordings || [])
@@ -2269,7 +2476,7 @@ function RecordingsPage({ cameras }) {
   const deleteRecording = async (recordingId) => {
     if (!confirm('Delete this recording?')) return
     try {
-      await fetch(`${API_URL}/recordings/${recordingId}`, { method: 'DELETE' })
+      await authFetch(`${API_URL}/recordings/${recordingId}`, { method: 'DELETE' })
       setRecordings(prev => prev.filter(r => r.id !== recordingId))
     } catch (err) {
       console.error('Failed to delete recording:', err)
@@ -2456,7 +2663,7 @@ function RecordingsPage({ cameras }) {
                               <Play className="h-4 w-4" />
                             </button>
                             <a
-                              href={`${API_URL}/recordings/${rec.id}/download`}
+                              href={authUrl(`${API_URL}/recordings/${rec.id}/download`)}
                               className="p-2 hover:bg-gray-600 rounded-lg transition text-green-400"
                               title="Download"
                             >

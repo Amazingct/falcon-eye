@@ -1,3 +1,4 @@
+import { authFetch } from '../App'
 import React, { useState, useEffect } from 'react'
 import { Clock, Plus, Trash2, Play, Edit, RefreshCw, Loader2, AlertCircle, CheckCircle, X } from 'lucide-react'
 import CronExpressionBuilder, { describeCron } from './CronExpressionBuilder'
@@ -14,7 +15,7 @@ export default function CronJobsPage() {
 
   const fetchCronJobs = async () => {
     try {
-      const res = await fetch(`${API_URL}/cron/`)
+      const res = await authFetch(`${API_URL}/cron/`)
       if (!res.ok) throw new Error('Failed to fetch cron jobs')
       const data = await res.json()
       setCronJobs(data.cron_jobs || [])
@@ -27,7 +28,7 @@ export default function CronJobsPage() {
 
   const fetchAgents = async () => {
     try {
-      const res = await fetch(`${API_URL}/agents/`)
+      const res = await authFetch(`${API_URL}/agents/`)
       if (res.ok) {
         const data = await res.json()
         setAgents(data.agents || [])
@@ -51,7 +52,7 @@ export default function CronJobsPage() {
   const deleteCronJob = async (id) => {
     if (!confirm('Delete this cron job?')) return
     try {
-      await fetch(`${API_URL}/cron/${id}`, { method: 'DELETE' })
+      await authFetch(`${API_URL}/cron/${id}`, { method: 'DELETE' })
       fetchCronJobs()
     } catch (err) {
       setError(err.message)
@@ -60,7 +61,7 @@ export default function CronJobsPage() {
 
   const runNow = async (id) => {
     try {
-      const res = await fetch(`${API_URL}/cron/${id}/run`, { method: 'POST' })
+      const res = await authFetch(`${API_URL}/cron/${id}/run`, { method: 'POST' })
       if (!res.ok) throw new Error('Failed to trigger cron job')
       const data = await res.json()
       setError(null)
@@ -72,7 +73,7 @@ export default function CronJobsPage() {
 
   const toggleEnabled = async (job) => {
     try {
-      await fetch(`${API_URL}/cron/${job.id}`, {
+      await authFetch(`${API_URL}/cron/${job.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !job.enabled }),
@@ -235,7 +236,7 @@ function CronJobModal({ job, agents, onClose, onSave }) {
     try {
       const url = isEdit ? `${API_URL}/cron/${job.id}` : `${API_URL}/cron/`
       const method = isEdit ? 'PATCH' : 'POST'
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
