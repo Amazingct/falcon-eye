@@ -171,8 +171,28 @@ async def list_recordings(camera_id: str = None, **kwargs) -> str:
     for r in recs:
         dur = f"{r.get('duration_seconds', '?')}s" if r.get("duration_seconds") else "in progress"
         cloud = " ☁️" if r.get("cloud_url") else ""
-        summary.append(f"- {r['file_name']} ({r['status']}, {dur}{cloud}) [id: {r['id']}]")
-    return f"Found {len(recs)} recordings:\n" + "\n".join(summary)
+        dl_url = r.get("cloud_url") or f"/api/recordings/{r['id']}/download"
+        summary.append(f"- {r['file_name']} ({r['status']}, {dur}{cloud}) [id: {r['id']}] download: {dl_url}")
+    return f"Found {len(recs)} recordings:\n" + "\n".join(summary) + "\n\nTo send a recording to the user, use send_media with the download path."
+
+
+async def get_recording(recording_id: str, **kwargs) -> str:
+    """Get details and download URL for a specific recording."""
+    try:
+        result = await _api_get(f"/api/recordings/{recording_id}")
+        dl_url = result.get("cloud_url") or f"/api/recordings/{recording_id}/download"
+        return (
+            f"Recording: {result.get('file_name', 'unknown')}\n"
+            f"Camera: {result.get('camera_id', 'unknown')}\n"
+            f"Duration: {result.get('duration_seconds', '?')}s\n"
+            f"Status: {result.get('status', 'unknown')}\n"
+            f"Download URL: {dl_url}\n"
+            f"File path: {result.get('file_path', 'N/A')}\n"
+            f"Cloud URL: {result.get('cloud_url', 'N/A')}\n\n"
+            f"To send this to the user, call send_media with path='{dl_url}'"
+        )
+    except Exception as e:
+        return f"Error getting recording: {e}"
 
 
 async def list_nodes(**kwargs) -> str:
@@ -992,6 +1012,7 @@ HANDLER_MAP = {
     "app.tools.handlers.start_recording": start_recording,
     "app.tools.handlers.stop_recording": stop_recording,
     "app.tools.handlers.list_recordings": list_recordings,
+    "app.tools.handlers.get_recording": get_recording,
     "app.tools.handlers.list_nodes": list_nodes,
     "app.tools.handlers.scan_cameras": scan_cameras,
     "app.tools.handlers.system_info": system_info,

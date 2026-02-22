@@ -89,6 +89,19 @@ TOOLS_REGISTRY = {
         },
         "handler": "app.tools.handlers.list_recordings",
     },
+    "get_recording": {
+        "name": "get_recording",
+        "description": "Get details and download URL for a specific recording. Use this to get the URL before sending a recording to the user via send_media.",
+        "category": "recording",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recording_id": {"type": "string", "description": "Recording UUID"},
+            },
+            "required": ["recording_id"],
+        },
+        "handler": "app.tools.handlers.get_recording",
+    },
     "node_list": {
         "name": "list_nodes",
         "description": "Get cluster nodes and their health status",
