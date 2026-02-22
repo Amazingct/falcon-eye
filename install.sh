@@ -720,22 +720,23 @@ setup_auth_secret() {
     DEFAULT_USER="admin"
     DEFAULT_PASS="falconeye"
 
-    # Hash password with Python (bcrypt)
-    PASS_HASH=$(python3 -c "
-from passlib.context import CryptContext
-print(CryptContext(schemes=['bcrypt']).hash('${DEFAULT_PASS}'))
-" 2>/dev/null || echo "")
+    # Hash password — try multiple methods
+    PASS_HASH=""
 
-    # Fallback: use htpasswd if python/passlib not available
+    # Method 1: python3 + bcrypt
     if [ -z "$PASS_HASH" ]; then
-        if command -v htpasswd &>/dev/null; then
-            PASS_HASH=$(htpasswd -nbBC 10 "" "${DEFAULT_PASS}" | cut -d: -f2)
-        fi
+        PASS_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'${DEFAULT_PASS}', bcrypt.gensalt()).decode())" 2>/dev/null || echo "")
     fi
 
-    # Fallback: generate hash inside the API pod after deployment
+    # Method 2: htpasswd
     if [ -z "$PASS_HASH" ]; then
-        echo -e "${YELLOW}  ⚠ Cannot hash password locally — will create via API on first start${NC}"
+        PASS_HASH=$(htpasswd -nbBC 10 "" "${DEFAULT_PASS}" 2>/dev/null | cut -d: -f2 || echo "")
+    fi
+
+    # Method 3: defer to API pod (created after deployment)
+    if [ -z "$PASS_HASH" ]; then
+        echo -e "${YELLOW}  ⚠ Cannot hash password locally — will create after API starts${NC}"
+        DEFERRED_AUTH=true
         return
     fi
 

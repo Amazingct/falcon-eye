@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
@@ -18,8 +18,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing (using bcrypt directly to avoid passlib version issues)
 
 # JWT settings
 ALGORITHM = "HS256"
@@ -102,7 +101,7 @@ def is_default_credentials() -> bool:
 
 def create_auth_secret(username: str, password: str) -> bool:
     """Create the falcon-eye-auth K8s secret with hashed password."""
-    password_hash = pwd_context.hash(password)
+    password_hash = hash_password(password)
     jwt_key = secrets.token_hex(32)
     internal_key = secrets.token_hex(32)
 
@@ -131,7 +130,7 @@ def create_auth_secret(username: str, password: str) -> bool:
 
 def update_auth_secret(username: str, password: str) -> bool:
     """Update credentials in the falcon-eye-auth K8s secret, preserving jwt_secret and internal_api_key."""
-    password_hash = pwd_context.hash(password)
+    password_hash = hash_password(password)
 
     # Read existing secret to preserve jwt_secret and internal_api_key
     try:
@@ -167,8 +166,12 @@ def update_auth_secret(username: str, password: str) -> bool:
         raise
 
 
+def hash_password(password: str) -> str:
+    return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return _bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
 
 
 def create_access_token(username: str) -> str:
