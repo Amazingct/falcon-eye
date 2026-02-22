@@ -347,14 +347,24 @@ async def process_message(message_text: str, session_id: str,
 
 async def download_file(path: str) -> bytes | None:
     try:
-        async with httpx.AsyncClient(timeout=30, headers=_api_headers()) as client:
-            res = await client.get(f"{API_URL}/api/files/read/{path}")
+        # Determine the full URL based on path type
+        if path.startswith("http://") or path.startswith("https://"):
+            url = path  # Full URL (e.g. cloud URL)
+        elif path.startswith("/api/"):
+            url = f"{API_URL}{path}"  # API path (e.g. /api/recordings/{id}/download)
+        else:
+            url = f"{API_URL}/api/files/read/{path}"  # Filesystem path
+
+        async with httpx.AsyncClient(timeout=60, headers=_api_headers()) as client:
+            res = await client.get(url)
             if res.status_code == 200:
                 content_type = res.headers.get("content-type", "")
                 if "application/json" in content_type:
                     data = res.json()
                     return data.get("content", "").encode("utf-8") if "content" in data else None
                 return res.content
+            else:
+                logger.error(f"Failed to download {url}: {res.status_code}")
     except Exception as e:
         logger.error(f"Failed to download file {path}: {e}")
     return None
@@ -415,7 +425,8 @@ async def start_telegram_bot():
             logger.warning(f"Failed to persist chat_id: {e}")
 
     async def send_media_to_chat(chat, media_item, bot):
-        file_path = media_item.get("path", "")
+        # Prioritize: url > cloud_url > path
+        file_path = media_item.get("url") or media_item.get("cloud_url") or media_item.get("path", "")
         caption = media_item.get("caption", "")
         media_type = media_item.get("media_type", "document")
 

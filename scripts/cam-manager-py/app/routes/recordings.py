@@ -364,11 +364,11 @@ async def download_recording(
     if not recording.file_path and not recording.cloud_url:
         raise HTTPException(status_code=404, detail="No file path for this recording")
     
-    # 0. If cloud URL is set and local file is gone, stream from cloud via API
-    if recording.cloud_url and (not recording.file_path or not os.path.exists(recording.file_path)):
+    # 0. Cloud URL is priority — stream from S3/Spaces via API
+    if recording.cloud_url:
         return await _stream_from_cloud(recording)
     
-    # 1. Try local file first (same node or shared storage)
+    # 1. Fallback: local file (same node or shared storage)
     if recording.file_path and os.path.exists(recording.file_path):
         return FileResponse(
             recording.file_path,

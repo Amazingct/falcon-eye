@@ -135,23 +135,31 @@ def upload_recording_to_cloud(self, recording_id: str):
         else:
             cloud_url = f"https://{cloud['bucket']}.s3.{cloud['region']}.amazonaws.com/{s3_key}"
 
-        # Update DB
-        with engine.connect() as conn:
-            conn.execute(
-                text("UPDATE recordings SET cloud_url = :url, status = 'UPLOADED' WHERE id = :id"),
-                {"url": cloud_url, "id": recording_id},
-            )
-            conn.commit()
-
-        logger.info("Upload complete: %s -> %s", recording_id, cloud_url)
-
         # Delete local file if configured (or always delete temp files)
+        local_deleted = False
         if temp_file and os.path.exists(temp_file):
             os.remove(temp_file)
             logger.info("Deleted temp file: %s", temp_file)
-        elif cloud["delete_local"] and os.path.exists(file_path):
+        elif cloud["delete_local"] and file_path and os.path.exists(file_path):
             os.remove(file_path)
+            local_deleted = True
             logger.info("Deleted local file: %s", file_path)
+
+        # Update DB — set cloud_url, status, and clear file_path if local was deleted
+        with engine.connect() as conn:
+            if local_deleted:
+                conn.execute(
+                    text("UPDATE recordings SET cloud_url = :url, status = 'UPLOADED', file_path = NULL WHERE id = :id"),
+                    {"url": cloud_url, "id": recording_id},
+                )
+            else:
+                conn.execute(
+                    text("UPDATE recordings SET cloud_url = :url, status = 'UPLOADED' WHERE id = :id"),
+                    {"url": cloud_url, "id": recording_id},
+                )
+            conn.commit()
+
+        logger.info("Upload complete: %s -> %s (local deleted: %s)", recording_id, cloud_url, local_deleted)
 
     except ClientError as e:
         logger.error("S3 upload failed for %s: %s", recording_id, e)
