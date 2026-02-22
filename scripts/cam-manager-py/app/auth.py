@@ -70,8 +70,17 @@ def _get_jwt_secret() -> str:
     return _jwt_secret
 
 
+_auth_secret_cache: Optional[dict] = None
+_auth_secret_cache_ts: float = 0
+
 def get_auth_secret() -> Optional[dict]:
-    """Read falcon-eye-auth secret from K8s. Returns dict with 'username' and 'password_hash' or None."""
+    """Read falcon-eye-auth secret from K8s. Cached for 30s."""
+    import time
+    global _auth_secret_cache, _auth_secret_cache_ts
+    now = time.time()
+    if _auth_secret_cache is not None and (now - _auth_secret_cache_ts) < 30:
+        return _auth_secret_cache
+
     try:
         secret = _get_core_api().read_namespaced_secret(
             name=SECRET_NAME,
@@ -79,24 +88,45 @@ def get_auth_secret() -> Optional[dict]:
         )
         data = secret.data or {}
         if "username" not in data or "password_hash" not in data:
+            _auth_secret_cache = None
+            _auth_secret_cache_ts = now
             return None
-        return {
+        result = {
             "username": base64.b64decode(data["username"]).decode(),
             "password_hash": base64.b64decode(data["password_hash"]).decode(),
         }
+        _auth_secret_cache = result
+        _auth_secret_cache_ts = now
+        return result
     except ApiException as e:
         if e.status == 404:
+            _auth_secret_cache = None
+            _auth_secret_cache_ts = now
             return None
         logger.error(f"Error reading auth secret: {e.reason}")
-        return None
+        return _auth_secret_cache
 
+
+_is_default_cache: Optional[bool] = None
+_is_default_cache_ts: float = 0
 
 def is_default_credentials() -> bool:
-    """Check if credentials are still the defaults (admin/falconeye)."""
+    """Check if credentials are still the defaults (admin/falconeye). Cached for 60s."""
+    import time
+    global _is_default_cache, _is_default_cache_ts
+    now = time.time()
+    if _is_default_cache is not None and (now - _is_default_cache_ts) < 60:
+        return _is_default_cache
+
     creds = get_auth_secret()
     if not creds:
+        _is_default_cache = False
+        _is_default_cache_ts = now
         return False
-    return creds["username"] == "admin" and verify_password("falconeye", creds["password_hash"])
+    result = creds["username"] == "admin" and verify_password("falconeye", creds["password_hash"])
+    _is_default_cache = result
+    _is_default_cache_ts = now
+    return result
 
 
 def create_auth_secret(username: str, password: str) -> bool:
@@ -130,6 +160,11 @@ def create_auth_secret(username: str, password: str) -> bool:
 
 def update_auth_secret(username: str, password: str) -> bool:
     """Update credentials in the falcon-eye-auth K8s secret, preserving jwt_secret and internal_api_key."""
+    global _auth_secret_cache, _auth_secret_cache_ts, _is_default_cache, _is_default_cache_ts
+    _auth_secret_cache = None
+    _auth_secret_cache_ts = 0
+    _is_default_cache = None
+    _is_default_cache_ts = 0
     password_hash = hash_password(password)
 
     # Read existing secret to preserve jwt_secret and internal_api_key
