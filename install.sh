@@ -23,11 +23,9 @@ IS_UPGRADE=false
 
 # LOCAL_TEST=true builds images from local source instead of pulling from ghcr.io
 LOCAL_TEST="${LOCAL_TEST:-false}"
+IMAGE_PULL_POLICY="Always"
 if [ "$LOCAL_TEST" = "true" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    IMAGE_PULL_POLICY="IfNotPresent"
-else
-    IMAGE_PULL_POLICY="Always"
 fi
 
 echo -e "${BLUE}"

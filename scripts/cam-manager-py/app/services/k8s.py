@@ -148,7 +148,7 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
                     "containers": [{
                         "name": "recorder",
                         "image": "ghcr.io/amazingct/falcon-eye-recorder:latest",
-                        "imagePullPolicy": "IfNotPresent",
+                        "imagePullPolicy": os.environ.get("IMAGE_PULL_POLICY", "Always"),
                         "ports": [{"containerPort": 8080, "name": "http"}],
                         "env": [
                             {"name": "CAMERA_ID", "value": str(camera.id)},
@@ -863,7 +863,7 @@ async def create_k8s_cronjob(cron_job, agent) -> str:
                             "containers": [{
                                 "name": "cron-runner",
                                 "image": "ghcr.io/amazingct/falcon-eye-cron-runner:latest",
-                                "imagePullPolicy": "IfNotPresent",
+                                "imagePullPolicy": os.environ.get("IMAGE_PULL_POLICY", "Always"),
                                 "env": [
                                     {"name": "API_URL", "value": f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"},
                                     {"name": "AGENT_ID", "value": str(agent.id)},
@@ -959,7 +959,7 @@ async def trigger_k8s_cronjob(cron_job, agent) -> str:
                     "containers": [{
                         "name": "cron-runner",
                         "image": "ghcr.io/amazingct/falcon-eye-cron-runner:latest",
-                        "imagePullPolicy": "IfNotPresent",
+                        "imagePullPolicy": os.environ.get("IMAGE_PULL_POLICY", "Always"),
                         "env": [
                             {"name": "API_URL", "value": f"http://falcon-eye-api.{settings.k8s_namespace}.svc.cluster.local:8000"},
                             {"name": "AGENT_ID", "value": str(agent.id)},
