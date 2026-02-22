@@ -177,19 +177,33 @@ async def list_recordings(camera_id: str = None, **kwargs) -> str:
 
 
 async def get_recording(recording_id: str, **kwargs) -> str:
-    """Get details and download URL for a specific recording."""
+    """Get full details and download URL for a specific recording."""
     try:
         result = await _api_get(f"/api/recordings/{recording_id}")
         dl_url = result.get("cloud_url") or f"/api/recordings/{recording_id}/download"
+        camera_info = result.get("camera_info") or {}
+        camera_name = camera_info.get("name", result.get("camera_id", "unknown"))
+        node = camera_info.get("node_name", result.get("node_name", "N/A"))
+        file_size = result.get("file_size_bytes")
+        size_str = f"{file_size / 1024 / 1024:.1f}MB" if file_size else "unknown"
+
         return (
             f"Recording: {result.get('file_name', 'unknown')}\n"
-            f"Camera: {result.get('camera_id', 'unknown')}\n"
-            f"Duration: {result.get('duration_seconds', '?')}s\n"
+            f"ID: {result.get('id', recording_id)}\n"
+            f"Camera: {camera_name}\n"
+            f"Camera ID: {result.get('camera_id', 'unknown')}\n"
+            f"Node: {node}\n"
             f"Status: {result.get('status', 'unknown')}\n"
+            f"Start: {result.get('start_time', 'N/A')}\n"
+            f"End: {result.get('end_time', 'N/A')}\n"
+            f"Duration: {result.get('duration_seconds', '?')}s\n"
+            f"File size: {size_str}\n"
+            f"Resolution: {result.get('resolution', 'N/A')}\n"
+            f"File path (local): {result.get('file_path', 'N/A')}\n"
+            f"Cloud URL: {result.get('cloud_url', 'N/A')}\n"
             f"Download URL: {dl_url}\n"
-            f"File path: {result.get('file_path', 'N/A')}\n"
-            f"Cloud URL: {result.get('cloud_url', 'N/A')}\n\n"
-            f"To send this to the user, call send_media with path='{dl_url}'"
+            f"Created: {result.get('created_at', 'N/A')}\n\n"
+            f"To send this recording to the user, call send_media with path='{dl_url}'"
         )
     except Exception as e:
         return f"Error getting recording: {e}"
