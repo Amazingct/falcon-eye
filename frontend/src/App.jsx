@@ -1554,7 +1554,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
     { id: 'recording_settings', label: 'Recordings', icon: Film, description: 'Chunking & cloud storage' },
     { id: 'nodes', label: 'Nodes & Cluster', icon: Server, description: 'Kubernetes management' },
     { id: 'agents', label: 'Agents', icon: Bot, description: 'AI agents & API key' },
-    { id: 'chatbot', label: 'Chatbot', icon: Bot, description: 'AI assistant tools' },
+    { id: 'queue', label: 'Upload Queue', icon: Clock, description: 'Cloud upload tasks' },
     { id: 'cron', label: 'Cron Jobs', icon: Clock, description: 'Scheduled tasks' },
     { id: 'security', label: 'Security', icon: Shield, description: 'Login credentials' },
   ]
@@ -2132,70 +2132,190 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
                 <SecuritySection />
               )}
 
-              {activeSection === 'chatbot' && (
-                <div className="space-y-8">
-                  <div>
-                    <h2 className="text-2xl font-bold">Chatbot</h2>
-                    <p className="text-gray-400 mt-1">Configure which tools the built-in AI assistant can use</p>
-                  </div>
-
-                  {/* Tool toggles */}
-                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-5">
-                    <div>
-                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Enabled Tools</h3>
-                      <p className="text-xs text-gray-500 mt-1">Control which capabilities the chatbot can use when answering queries</p>
-                    </div>
-
-                    {settings?.chatbot?.available_tools?.length > 0 ? (
-                      <div className="space-y-2">
-                        {settings.chatbot.available_tools.map(tool => {
-                          const isEnabled = (form.chatbot_tools || settings?.chatbot?.enabled_tools || []).includes(tool)
-                          return (
-                            <label key={tool} className="flex items-center justify-between bg-gray-700/50 hover:bg-gray-700 rounded-lg px-4 py-3 cursor-pointer transition group">
-                              <div>
-                                <p className="text-sm font-medium capitalize">{tool.replace(/_/g, ' ')}</p>
-                                <p className="text-xs text-gray-500 font-mono mt-0.5">{tool}</p>
-                              </div>
-                              <div className="relative flex-shrink-0 ml-4">
-                                <input
-                                  type="checkbox"
-                                  checked={isEnabled}
-                                  onChange={(e) => {
-                                    const current = form.chatbot_tools || settings?.chatbot?.enabled_tools || []
-                                    if (e.target.checked) {
-                                      setForm({ ...form, chatbot_tools: [...current, tool] })
-                                    } else {
-                                      setForm({ ...form, chatbot_tools: current.filter(t => t !== tool) })
-                                    }
-                                  }}
-                                  className="sr-only peer"
-                                />
-                                <div className={`w-10 h-6 rounded-full transition-colors ${isEnabled ? 'bg-blue-600' : 'bg-gray-600'} peer-focus:ring-2 peer-focus:ring-blue-500`} />
-                                <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${isEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
-                              </div>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-gray-500 text-center py-6">No tools available</p>
-                    )}
-
-                    <button
-                      onClick={() => saveSettings({ chatbot_tools: form.chatbot_tools })}
-                      disabled={saving}
-                      className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-6 py-2.5 rounded-lg transition font-medium"
-                    >
-                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                      <span>{saving ? 'Saving…' : 'Save Tool Settings'}</span>
-                    </button>
-                  </div>
-                </div>
+              {activeSection === 'queue' && (
+                <QueueSection />
               )}
             </>
           )}
         </div>
         </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Queue Management Section
+function QueueSection() {
+  const [status, setStatus] = useState(null)
+  const [tasks, setTasks] = useState(null)
+  const [filter, setFilter] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [purging, setPurging] = useState(false)
+  const [confirmPurge, setConfirmPurge] = useState(false)
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [sRes, tRes] = await Promise.all([
+        authFetch(`${API_URL}/queue/status`),
+        authFetch(`${API_URL}/queue/tasks`),
+      ])
+      if (sRes.ok) setStatus(await sRes.json())
+      if (tRes.ok) setTasks(await tRes.json())
+    } catch (e) {
+      console.error('Queue fetch error', e)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchData()
+    const iv = setInterval(fetchData, 5000)
+    return () => clearInterval(iv)
+  }, [fetchData])
+
+  const retryTask = async (taskId) => {
+    await authFetch(`${API_URL}/queue/retry/${taskId}`, { method: 'POST' })
+    fetchData()
+  }
+
+  const purgeQueue = async () => {
+    setPurging(true)
+    await authFetch(`${API_URL}/queue/purge`, { method: 'POST' })
+    setConfirmPurge(false)
+    setPurging(false)
+    fetchData()
+  }
+
+  const TASK_NAMES = {
+    upload_recording_to_cloud: 'Upload Recording',
+    delete_local_recording: 'Delete Local File',
+  }
+  const STATUS_BADGE = {
+    active: { icon: '🔄', cls: 'bg-blue-500/20 text-blue-400' },
+    reserved: { icon: '⏳', cls: 'bg-yellow-500/20 text-yellow-400' },
+    completed: { icon: '✅', cls: 'bg-green-500/20 text-green-400' },
+    failed: { icon: '❌', cls: 'bg-red-500/20 text-red-400' },
+  }
+
+  const allTasks = tasks ? [
+    ...(tasks.active || []).map(t => ({ ...t, status: 'active' })),
+    ...(tasks.reserved || []).map(t => ({ ...t, status: 'reserved' })),
+    ...(tasks.completed || []).map(t => ({ ...t, status: 'completed' })),
+    ...(tasks.failed || []).map(t => ({ ...t, status: 'failed' })),
+  ] : []
+
+  const filtered = filter === 'all' ? allTasks : allTasks.filter(t => t.status === filter)
+  const filters = ['all', 'active', 'reserved', 'completed', 'failed']
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-gray-400" /></div>
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-2xl font-bold">Upload Queue</h2>
+        <p className="text-gray-400 mt-1">Monitor Celery workers and cloud upload tasks</p>
+      </div>
+
+      {/* Worker Status */}
+      <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Worker Status</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-gray-700/50 rounded-lg p-4">
+            <p className="text-xs text-gray-400 mb-1">Redis</p>
+            <p className="text-lg font-semibold">
+              {status?.redis_connected ? '🟢 Connected' : '🔴 Disconnected'}
+            </p>
+          </div>
+          <div className="bg-gray-700/50 rounded-lg p-4">
+            <p className="text-xs text-gray-400 mb-1">Active Workers</p>
+            <p className="text-lg font-semibold">{status?.workers?.length || 0}</p>
+          </div>
+          <div className="bg-gray-700/50 rounded-lg p-4">
+            <p className="text-xs text-gray-400 mb-1">Stats</p>
+            <p className="text-sm">
+              <span className="text-green-400">{status?.stats?.completed || 0} done</span>
+              {' · '}
+              <span className="text-red-400">{status?.stats?.failed || 0} failed</span>
+            </p>
+          </div>
+        </div>
+        {status?.workers?.length > 0 && (
+          <div className="space-y-1">
+            {status.workers.map((w, i) => (
+              <div key={i} className="flex items-center space-x-2 text-sm text-gray-300 bg-gray-700/30 rounded px-3 py-2">
+                <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+                <span className="font-mono text-xs truncate">{w.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Task Queue */}
+      <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tasks</h3>
+          {confirmPurge ? (
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-yellow-400">Purge all pending?</span>
+              <button onClick={purgeQueue} disabled={purging} className="text-xs bg-red-600 hover:bg-red-700 px-3 py-1 rounded transition">
+                {purging ? 'Purging…' : 'Confirm'}
+              </button>
+              <button onClick={() => setConfirmPurge(false)} className="text-xs bg-gray-600 hover:bg-gray-500 px-3 py-1 rounded transition">Cancel</button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmPurge(true)} className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded transition text-gray-300">
+              Purge Queue
+            </button>
+          )}
+        </div>
+
+        {/* Filters */}
+        <div className="flex space-x-1">
+          {filters.map(f => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`text-xs px-3 py-1.5 rounded-lg transition capitalize ${filter === f ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+
+        {/* Task List */}
+        {filtered.length === 0 ? (
+          <p className="text-sm text-gray-500 text-center py-8">No {filter === 'all' ? '' : filter} tasks</p>
+        ) : (
+          <div className="space-y-2">
+            {filtered.map((task, i) => {
+              const badge = STATUS_BADGE[task.status] || STATUS_BADGE.active
+              return (
+                <div key={task.task_id || i} className="flex items-center justify-between bg-gray-700/50 rounded-lg px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full ${badge.cls}`}>
+                        {badge.icon} {task.status}
+                      </span>
+                      <span className="text-sm font-medium truncate">{TASK_NAMES[task.task_name] || task.task_name}</span>
+                    </div>
+                    <div className="flex items-center space-x-3 mt-1 text-xs text-gray-500">
+                      {task.recording_id && <span className="font-mono">{task.recording_id.slice(0, 8)}…</span>}
+                      {task.started_at && <span>{new Date(task.started_at).toLocaleString()}</span>}
+                    </div>
+                    {task.error && <p className="text-xs text-red-400 mt-1 truncate">{task.error}</p>}
+                  </div>
+                  {task.status === 'failed' && (
+                    <button onClick={() => retryTask(task.task_id)} className="ml-3 text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded transition flex-shrink-0">
+                      Retry
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
     </div>

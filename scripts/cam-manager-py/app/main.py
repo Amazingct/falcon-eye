@@ -16,6 +16,7 @@ from app.routes.tools import router as tools_router
 from app.routes.files import router as files_router
 from app.routes.auth import router as auth_router
 from app.chatbot import router as chatbot_router
+from app.routes.queue import router as queue_router
 from app.models.schemas import HealthResponse
 from app.auth import require_auth
 
@@ -100,6 +101,7 @@ app.include_router(cron_router, dependencies=[Depends(require_auth)])
 app.include_router(tools_router, dependencies=[Depends(require_auth)])
 app.include_router(files_router, dependencies=[Depends(require_auth)])
 app.include_router(chatbot_router, dependencies=[Depends(require_auth)])
+app.include_router(queue_router, dependencies=[Depends(require_auth)])
 
 
 # Exception handlers
