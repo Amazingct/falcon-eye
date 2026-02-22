@@ -14,8 +14,15 @@ CRON_JOB_ID = os.getenv("CRON_JOB_ID", "")
 PROMPT = os.getenv("PROMPT", "")
 SESSION_ID = os.getenv("SESSION_ID", "")
 TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "120"))
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 TELEGRAM_API = "https://api.telegram.org"
+
+def _api_headers() -> dict:
+    h = {}
+    if INTERNAL_API_KEY:
+        h["X-Internal-Key"] = INTERNAL_API_KEY
+    return h
 
 
 def fetch_agent_config(client: httpx.Client) -> dict:
@@ -108,7 +115,7 @@ def main():
     result_text = ""
     media = []
 
-    with httpx.Client(timeout=TIMEOUT_SECONDS + 10) as client:
+    with httpx.Client(timeout=TIMEOUT_SECONDS + 10, headers=_api_headers()) as client:
         # 1. Send prompt to agent
         try:
             payload = {"message": PROMPT, "source": "cron"}

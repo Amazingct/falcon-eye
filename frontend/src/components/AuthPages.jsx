@@ -110,7 +110,7 @@ export function SetupPage({ onAuth }) {
   )
 }
 
-export function LoginPage({ onAuth }) {
+export function LoginPage({ onAuth, showDefaultHint = false }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -148,6 +148,11 @@ export function LoginPage({ onAuth }) {
           <p className="text-gray-400">Sign in to your dashboard</p>
         </div>
         <form onSubmit={handleSubmit} className="bg-gray-800 rounded-xl p-6 space-y-4 border border-gray-700">
+          {showDefaultHint && (
+            <div className="bg-blue-500/10 border border-blue-500/30 text-blue-300 px-4 py-2 rounded-lg text-sm">
+              Default credentials: <strong>admin</strong> / <strong>falconeye</strong>
+            </div>
+          )}
           {error && (
             <div className="bg-red-500/20 border border-red-500/50 text-red-300 px-4 py-2 rounded-lg text-sm">{error}</div>
           )}

@@ -38,8 +38,9 @@ export function authUrl(url) {
 }
 
 function App() {
-  const [authState, setAuthState] = useState('loading') // loading, setup, login, authenticated
+  const [authState, setAuthState] = useState('loading') // loading, login, authenticated
   const [authUser, setAuthUser] = useState(null)
+  const [isDefaultCreds, setIsDefaultCreds] = useState(false)
 
   const handleAuth = (token, username) => {
     _authToken = token
@@ -64,11 +65,13 @@ function App() {
         const headers = _authToken ? { 'Authorization': `Bearer ${_authToken}` } : {}
         const res = await fetch(`${API_URL}/auth/status`, { headers })
         const data = await res.json()
-        if (!data.setup_complete) {
-          setAuthState('setup')
-        } else if (data.authenticated) {
+        if (data.authenticated) {
           setAuthUser(data.username)
+          setIsDefaultCreds(!!data.is_default)
           setAuthState('authenticated')
+        } else if (!data.setup_complete) {
+          setIsDefaultCreds(true)
+          setAuthState('login')
         } else {
           localStorage.removeItem('falcon_eye_token')
           _authToken = null
@@ -102,8 +105,7 @@ function App() {
       </div>
     )
   }
-  if (authState === 'setup') return <SetupPage onAuth={handleAuth} />
-  if (authState === 'login') return <LoginPage onAuth={handleAuth} />
+  if (authState === 'login') return <LoginPage onAuth={handleAuth} showDefaultHint={isDefaultCreds} />
 
   return <Dashboard authUser={authUser} onLogout={handleLogout} />
 }

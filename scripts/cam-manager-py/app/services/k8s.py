@@ -870,6 +870,7 @@ async def create_k8s_cronjob(cron_job, agent) -> str:
                                     {"name": "SESSION_ID", "value": cron_job.session_id or ""},
                                     {"name": "TIMEOUT_SECONDS", "value": str(cron_job.timeout_seconds)},
                                 ],
+                                "envFrom": [{"configMapRef": {"name": "falcon-eye-config"}}],
                                 "resources": {
                                     "requests": {"memory": "64Mi", "cpu": "50m"},
                                     "limits": {"memory": "128Mi", "cpu": "200m"},

@@ -689,6 +689,76 @@ create_namespace() {
     fi
 }
 
+# Set up auth secret with default credentials
+setup_auth_secret() {
+    echo -e "${YELLOW}[4.5/9] Setting up authentication...${NC}"
+
+    if kubectl get secret ${SECRET_NAME:-falcon-eye-auth} -n ${NAMESPACE} &>/dev/null; then
+        echo -e "${GREEN}✓ Auth secret exists — preserving credentials${NC}"
+        # Backfill internal_api_key if missing (upgrade from older version)
+        EXISTING_INTERNAL=$(kubectl get secret falcon-eye-auth -n ${NAMESPACE} -o jsonpath='{.data.internal_api_key}' 2>/dev/null || echo "")
+        if [ -z "$EXISTING_INTERNAL" ]; then
+            INTERNAL_KEY=$(openssl rand -hex 32)
+            kubectl patch secret falcon-eye-auth -n ${NAMESPACE} \
+                -p "{\"data\":{\"internal_api_key\":\"$(echo -n "$INTERNAL_KEY" | base64 | tr -d '\n')\"}}" >/dev/null
+            echo -e "${GREEN}  ✓ Internal API key added${NC}"
+        else
+            INTERNAL_KEY=$(kubectl get secret falcon-eye-auth -n ${NAMESPACE} -o jsonpath='{.data.internal_api_key}' | base64 -d)
+        fi
+        # Backfill jwt_secret if missing
+        EXISTING_JWT=$(kubectl get secret falcon-eye-auth -n ${NAMESPACE} -o jsonpath='{.data.jwt_secret}' 2>/dev/null || echo "")
+        if [ -z "$EXISTING_JWT" ]; then
+            JWT_KEY=$(openssl rand -hex 32)
+            kubectl patch secret falcon-eye-auth -n ${NAMESPACE} \
+                -p "{\"data\":{\"jwt_secret\":\"$(echo -n "$JWT_KEY" | base64 | tr -d '\n')\"}}" >/dev/null
+            echo -e "${GREEN}  ✓ JWT secret added${NC}"
+        fi
+        return
+    fi
+
+    # Fresh install — create with defaults
+    DEFAULT_USER="admin"
+    DEFAULT_PASS="falconeye"
+
+    # Hash password with Python (bcrypt)
+    PASS_HASH=$(python3 -c "
+from passlib.context import CryptContext
+print(CryptContext(schemes=['bcrypt']).hash('${DEFAULT_PASS}'))
+" 2>/dev/null || echo "")
+
+    # Fallback: use htpasswd if python/passlib not available
+    if [ -z "$PASS_HASH" ]; then
+        if command -v htpasswd &>/dev/null; then
+            PASS_HASH=$(htpasswd -nbBC 10 "" "${DEFAULT_PASS}" | cut -d: -f2)
+        fi
+    fi
+
+    # Fallback: generate hash inside the API pod after deployment
+    if [ -z "$PASS_HASH" ]; then
+        echo -e "${YELLOW}  ⚠ Cannot hash password locally — will create via API on first start${NC}"
+        return
+    fi
+
+    JWT_KEY=$(openssl rand -hex 32)
+    INTERNAL_KEY=$(openssl rand -hex 32)
+
+    cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: falcon-eye-auth
+type: Opaque
+data:
+  username: $(echo -n "$DEFAULT_USER" | base64 | tr -d '\n')
+  password_hash: $(echo -n "$PASS_HASH" | base64 | tr -d '\n')
+  jwt_secret: $(echo -n "$JWT_KEY" | base64 | tr -d '\n')
+  internal_api_key: $(echo -n "$INTERNAL_KEY" | base64 | tr -d '\n')
+EOF
+
+    echo -e "${GREEN}✓ Auth configured (default: admin / falconeye)${NC}"
+    echo -e "${YELLOW}  ⚠ Change these credentials from the dashboard after login!${NC}"
+}
+
 # Deploy PostgreSQL
 deploy_database() {
     echo -e "${YELLOW}[5/9] Deploying PostgreSQL database...${NC}"
@@ -788,6 +858,7 @@ data:
   DEFAULT_FRAMERATE: "15"
   ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
   OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+  INTERNAL_API_KEY: "${INTERNAL_KEY:-}"
   DEFAULT_CAMERA_NODE: "${CAMERA_NODE:-}"
   DEFAULT_RECORDER_NODE: "${RECORDER_NODE:-}"
 ---
@@ -1335,6 +1406,7 @@ main() {
     detect_nodes
     configure_options
     create_namespace
+    setup_auth_secret
     if [ "$LOCAL_TEST" = "true" ]; then
         build_local_images
     fi

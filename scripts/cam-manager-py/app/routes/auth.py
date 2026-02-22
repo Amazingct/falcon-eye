@@ -12,6 +12,7 @@ from app.auth import (
     create_access_token,
     decode_token,
     require_auth,
+    is_default_credentials,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -60,6 +61,7 @@ async def auth_status(
         "setup_complete": setup_complete,
         "authenticated": authenticated,
         "username": username,
+        "is_default": is_default_credentials() if setup_complete else False,
     }
 
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, create_model
 from langchain_core.tools import StructuredTool
 
 API_URL = os.getenv("API_URL", "http://falcon-eye-api:8000")
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 _TYPE_MAP = {
     "string": str,
@@ -67,7 +68,8 @@ def build_tools(
             payload: dict = {"tool_name": __tool_name, "arguments": kwargs}
             if __ctx:
                 payload["agent_context"] = __ctx
-            async with httpx.AsyncClient(base_url=base, timeout=60) as client:
+            _headers = {"X-Internal-Key": INTERNAL_API_KEY} if INTERNAL_API_KEY else {}
+            async with httpx.AsyncClient(base_url=base, timeout=60, headers=_headers) as client:
                 res = await client.post("/api/tools/execute", json=payload)
                 if res.status_code == 200:
                     data = res.json()

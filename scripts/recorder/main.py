@@ -28,6 +28,14 @@ RECORDINGS_PATH = os.getenv("RECORDINGS_PATH", "/recordings")
 API_URL = os.getenv("API_URL", "http://falcon-eye-api:8000")
 SEGMENT_DURATION = int(os.getenv("SEGMENT_DURATION", "3600"))
 NODE_NAME = os.getenv("NODE_NAME", "")
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
+def _api_headers() -> dict:
+    """Headers for internal API calls."""
+    h = {}
+    if INTERNAL_API_KEY:
+        h["X-Internal-Key"] = INTERNAL_API_KEY
+    return h
 
 # Recording state
 current_process: Optional[subprocess.Popen] = None
@@ -73,7 +81,7 @@ def generate_filename() -> tuple[str, str]:
 async def notify_api_start(recording_id: str, file_path: str, file_name: str, start_time: datetime):
     """Notify main API that recording started"""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, headers=_api_headers()) as client:
             payload = {
                 "id": recording_id,
                 "camera_id": CAMERA_ID,
@@ -93,7 +101,7 @@ async def notify_api_start(recording_id: str, file_path: str, file_name: str, st
 async def notify_api_stop(recording_id: str, end_time: datetime, file_size: int):
     """Notify main API that recording stopped"""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, headers=_api_headers()) as client:
             await client.patch(f"{API_URL}/api/recordings/{recording_id}", json={
                 "end_time": end_time.isoformat(),
                 "status": "completed",
@@ -106,7 +114,7 @@ async def notify_api_stop(recording_id: str, end_time: datetime, file_size: int)
 async def notify_api_failed(recording_id: str, error_message: str):
     """Notify main API that recording failed"""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, headers=_api_headers()) as client:
             await client.patch(f"{API_URL}/api/recordings/{recording_id}", json={
                 "end_time": datetime.utcnow().isoformat(),
                 "status": "failed",

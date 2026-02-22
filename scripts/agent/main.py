@@ -31,6 +31,14 @@ logger = logging.getLogger("falcon-eye-agent")
 
 AGENT_ID = os.getenv("AGENT_ID", "")
 API_URL = os.getenv("API_URL", "http://falcon-eye-api:8000")
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+
+def _api_headers() -> dict:
+    """Headers for internal API calls."""
+    h = {}
+    if INTERNAL_API_KEY:
+        h["X-Internal-Key"] = INTERNAL_API_KEY
+    return h
 CHANNEL_TYPE = os.getenv("CHANNEL_TYPE", "")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
@@ -187,7 +195,7 @@ async def fetch_chat_config() -> dict:
         return _chat_config_cache
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, headers=_api_headers()) as client:
             res = await client.get(f"{API_URL}/api/agents/{AGENT_ID}/chat-config")
             if res.status_code == 200:
                 _chat_config_cache = res.json()
@@ -201,7 +209,7 @@ async def fetch_chat_config() -> dict:
 
 async def fetch_history(session_id: str) -> list[dict]:
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, headers=_api_headers()) as client:
             res = await client.get(
                 f"{API_URL}/api/chat/{AGENT_ID}/history",
                 params={"session_id": session_id, "limit": 50},
@@ -258,7 +266,7 @@ async def save_message(session_id: str, role: str, content, source: str,
                        prompt_tokens: int | None = None,
                        completion_tokens: int | None = None):
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, headers=_api_headers()) as client:
             await client.post(
                 f"{API_URL}/api/chat/{AGENT_ID}/messages/save",
                 json={
@@ -334,7 +342,7 @@ async def process_message(message_text: str, session_id: str,
 
 async def download_file(path: str) -> bytes | None:
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, headers=_api_headers()) as client:
             res = await client.get(f"{API_URL}/api/files/read/{path}")
             if res.status_code == 200:
                 content_type = res.headers.get("content-type", "")
@@ -350,7 +358,7 @@ async def download_file(path: str) -> bytes | None:
 async def upload_file(path: str, file_bytes: bytes, filename: str, mime_type: str = "application/octet-stream") -> bool:
     """Upload binary content into the shared filesystem via the API."""
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, headers=_api_headers()) as client:
             res = await client.post(
                 f"{API_URL}/api/files/upload/{path}",
                 files={"file": (filename, file_bytes, mime_type)},
@@ -383,7 +391,7 @@ async def start_telegram_bot():
         if chat_id_persisted:
             return
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, headers=_api_headers()) as client:
                 res = await client.get(f"{API_URL}/api/agents/{AGENT_ID}")
                 if res.status_code == 200:
                     agent_data = res.json()
@@ -649,7 +657,7 @@ async def run_task_mode():
     # Wait for API to become reachable
     for attempt in range(30):
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=5, headers=_api_headers()) as client:
                 res = await client.get(f"{API_URL}/health")
                 if res.status_code == 200:
                     break
@@ -665,7 +673,7 @@ async def run_task_mode():
     config = None
     for attempt in range(10):
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=15, headers=_api_headers()) as client:
                 res = await client.get(f"{API_URL}/api/agents/{AGENT_ID}/chat-config")
                 if res.status_code == 200:
                     config = res.json()
@@ -733,7 +741,7 @@ async def run_task_mode():
 async def _post_task_complete(result: str):
     """Post task result back to the API's task-complete callback endpoint."""
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, headers=_api_headers()) as client:
             await client.post(
                 f"{API_URL}/api/agents/{AGENT_ID}/task-complete",
                 json={
