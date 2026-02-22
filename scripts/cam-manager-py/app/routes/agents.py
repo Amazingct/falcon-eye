@@ -311,6 +311,39 @@ async def task_complete(agent_id: UUID, data: TaskCompleteRequest, db: AsyncSess
     return {"status": "completed", "agent_name": agent_name}
 
 
+@router.get("/{agent_id}/chat-config")
+async def get_chat_config(agent_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Return agent config for the agent pod (tools, system prompt, provider, model, keys)."""
+    from app.tools.registry import get_tools_for_agent
+
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    agent_tools = agent.tools or []
+    tools_schema = get_tools_for_agent(agent_tools) if agent_tools else []
+
+    # Determine API key based on provider
+    provider = agent.provider or os.environ.get("LLM_PROVIDER", "openai")
+    if provider == "anthropic":
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    else:
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+
+    return {
+        "provider": provider,
+        "model": agent.model or os.environ.get("LLM_MODEL", "gpt-4.1"),
+        "api_key": api_key,
+        "system_prompt": agent.system_prompt or "You are a helpful AI assistant.",
+        "tools_schema": tools_schema,
+        "temperature": agent.temperature if hasattr(agent, "temperature") else 0.7,
+        "max_tokens": agent.max_tokens if hasattr(agent, "max_tokens") else 4096,
+        "channel_type": agent.channel_type,
+        "channel_config": agent.channel_config or {},
+    }
+
+
 async def ensure_main_agent(db: AsyncSession):
     """Auto-create the main agent as a pod and ensure it's deployed"""
     MAIN_TOOLS = list(TOOLS_REGISTRY.keys())
