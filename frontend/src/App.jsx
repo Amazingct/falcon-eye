@@ -5,8 +5,7 @@ import CronJobsPage from './components/CronJobsPage'
 import AgentChat from './components/AgentChat'
 import AgentDetailPage from './components/AgentDetailPage'
 import CronExpressionBuilder from './components/CronExpressionBuilder'
-import ChatMarkdown from './components/ChatMarkdown'
-import ChatMedia from './components/ChatMedia'
+// ChatMarkdown and ChatMedia now used only within AgentChat component
 import { SetupPage, LoginPage } from './components/AuthPages'
 
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
@@ -2419,46 +2418,17 @@ function SecuritySection() {
   )
 }
 
-// Chat Widget Component
+// Chat Widget Component - wraps AgentChat in a floating/docked panel
 function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWidthChange }) {
-  const [sessions, setSessions] = useState([])
-  const [currentSession, setCurrentSession] = useState(null)
-  const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const [chatStatus, setChatStatus] = useState(null)
   const [mainAgentId, setMainAgentId] = useState(null)
   const [isResizing, setIsResizing] = useState(false)
-  const [showSessions, setShowSessions] = useState(false)
-  const [editingName, setEditingName] = useState(null)
-  const [newName, setNewName] = useState('')
-  const messagesEndRef = React.useRef(null)
 
-  const isMediaMessage = (msg) => {
-    if (!msg) return false
-    if (msg.role === 'assistant_media' || msg.role === 'user_media') return true
-    return typeof msg.content === 'object' && msg.content && Array.isArray(msg.content.media)
-  }
-
-  // Fetch sessions on mount
-  const fetchSessions = async (autoSelect = false) => {
-    try {
-      const res = await authFetch(`${API_URL}/chat/sessions`)
-      if (res.ok) {
-        const data = await res.json()
-        const list = data.sessions || []
-        setSessions(list)
-        if (autoSelect && list.length > 0 && !currentSession) {
-          loadSession(list[0])
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch sessions:', err)
-    }
-  }
-
+  // Find main agent
   useEffect(() => {
-    fetchSessions(true)
+    authFetch(`${API_URL}/agents/`).then(r => r.json()).then(data => {
+      const main = (data.agents || []).find(a => a.slug === 'main')
+      if (main) setMainAgentId(main.id)
+    }).catch(() => {})
   }, [])
 
   // Handle resize drag
@@ -2477,136 +2447,6 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
     }
   }, [isResizing])
 
-  // Find main agent and check chat readiness
-  useEffect(() => {
-    const findMainAgent = async () => {
-      try {
-        const res = await authFetch(`${API_URL}/agents/`)
-        if (res.ok) {
-          const data = await res.json()
-          const main = (data.agents || []).find(a => a.slug === 'main')
-          if (main) {
-            setMainAgentId(main.id)
-            setChatStatus({ status: 'ok', configured: true })
-          } else {
-            setChatStatus({ status: 'error', configured: false })
-          }
-        }
-      } catch (err) {
-        setChatStatus({ status: 'error', configured: false })
-      }
-    }
-    findMainAgent()
-  }, [])
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  const createNewSession = async () => {
-    try {
-      const res = await authFetch(`${API_URL}/chat/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      if (res.ok) {
-        const session = await res.json()
-        setSessions(prev => [session, ...prev])
-        setCurrentSession(session)
-        setMessages([])
-        setShowSessions(false)
-      }
-    } catch (err) {
-      console.error('Failed to create session:', err)
-    }
-  }
-
-  const loadSession = async (session) => {
-    try {
-      const res = await authFetch(`${API_URL}/chat/sessions/${session.id}`)
-      if (res.ok) {
-        const data = await res.json()
-        setCurrentSession(data)
-        setMessages(data.messages || [])
-        setShowSessions(false)
-      }
-    } catch (err) {
-      console.error('Failed to load session:', err)
-    }
-  }
-
-  const deleteSession = async (sessionId) => {
-    if (!confirm('Delete this chat?')) return
-    try {
-      await authFetch(`${API_URL}/chat/sessions/${sessionId}`, { method: 'DELETE' })
-      setSessions(prev => prev.filter(s => s.id !== sessionId))
-      if (currentSession?.id === sessionId) {
-        setCurrentSession(null)
-        setMessages([])
-      }
-    } catch (err) {
-      console.error('Failed to delete session:', err)
-    }
-  }
-
-  const renameSession = async (sessionId) => {
-    if (!newName.trim()) return
-    try {
-      const res = await authFetch(`${API_URL}/chat/sessions/${sessionId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim() })
-      })
-      if (res.ok) {
-        const updated = await res.json()
-        setSessions(prev => prev.map(s => s.id === sessionId ? updated : s))
-        if (currentSession?.id === sessionId) setCurrentSession(updated)
-      }
-    } catch (err) {
-      console.error('Failed to rename session:', err)
-    }
-    setEditingName(null)
-    setNewName('')
-  }
-
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading || !mainAgentId) return
-
-    const userMessage = { role: 'user', content: input.trim() }
-    setMessages(prev => [...prev, userMessage])
-    setInput('')
-    setIsLoading(true)
-
-    try {
-      const res = await authFetch(`${API_URL}/chat/${mainAgentId}/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage.content, source: 'dashboard', session_id: currentSession?.id }),
-      })
-      if (!res.ok) throw new Error('Chat request failed')
-
-      const data = await res.json()
-      // Update current session from response
-      if (data.session_id) {
-        const sid = data.session_id
-        setCurrentSession(prev => prev ? { ...prev, id: sid } : { id: sid, name: 'New Chat' })
-        // Refresh sessions list if this is a new session
-        if (!currentSession?.id || currentSession.id !== sid) {
-          fetchSessions()
-        }
-      }
-      setMessages(prev => [...prev, { role: 'assistant', content: data.response }])
-      if (data.media && data.media.length > 0) {
-        setMessages(prev => [...prev, ...data.media.map(m => ({ role: 'assistant_media', content: m }))])
-      }
-    } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
-  }
-
   if (!isOpen) {
     return (
       <button onClick={onToggle} className="fixed bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-700 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 z-50" title="Open Chat">
@@ -2616,103 +2456,36 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   }
 
   const panelClasses = isDocked
-    ? "fixed top-0 right-0 h-full bg-gray-800 border-l border-gray-700 shadow-xl z-40 flex"
-    : "fixed bottom-6 right-6 w-[450px] h-[550px] bg-gray-800 rounded-lg border border-gray-700 shadow-xl z-50 flex"
+    ? "fixed top-0 right-0 h-full bg-gray-800 border-l border-gray-700 shadow-xl z-40 flex flex-col"
+    : "fixed bottom-6 right-6 w-[450px] h-[550px] bg-gray-800 rounded-lg border border-gray-700 shadow-xl z-50 flex flex-col"
 
   return (
     <div className={panelClasses} style={isDocked ? { width: `${panelWidth}px` } : undefined}>
       {isDocked && (
-        <div className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-500 transition-colors" onMouseDown={(e) => { e.preventDefault(); setIsResizing(true) }} />
+        <div className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-500 transition-colors z-10" onMouseDown={(e) => { e.preventDefault(); setIsResizing(true) }} />
       )}
       
-      {/* Sessions sidebar */}
-      {showSessions && (
-        <div className="w-48 border-r border-gray-700 flex flex-col bg-gray-850">
-          <div className="p-2 border-b border-gray-700">
-            <button onClick={createNewSession} className="w-full flex items-center justify-center space-x-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm">
-              <Plus className="h-4 w-4" /><span>New Chat</span>
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {sessions.map(s => (
-              <div key={s.id} className={`group px-2 py-2 hover:bg-gray-700 cursor-pointer border-b border-gray-700/50 ${currentSession?.id === s.id ? 'bg-gray-700' : ''}`}>
-                {editingName === s.id ? (
-                  <input value={newName} onChange={e => setNewName(e.target.value)} onBlur={() => renameSession(s.id)} onKeyDown={e => e.key === 'Enter' && renameSession(s.id)} className="w-full bg-gray-600 px-2 py-1 text-xs rounded" autoFocus />
-                ) : (
-                  <div onClick={() => loadSession(s)} className="flex items-center justify-between">
-                    <span className="text-sm truncate flex-1">{s.name || 'New Chat'}</span>
-                    <div className="hidden group-hover:flex items-center space-x-1">
-                      <button onClick={(e) => { e.stopPropagation(); setEditingName(s.id); setNewName(s.name || '') }} className="p-1 hover:bg-gray-600 rounded"><Edit className="h-3 w-3" /></button>
-                      <button onClick={(e) => { e.stopPropagation(); deleteSession(s.id) }} className="p-1 hover:bg-red-600 rounded"><Trash2 className="h-3 w-3" /></button>
-                    </div>
-                  </div>
-                )}
-                <div className="text-xs text-gray-500">{s.message_count || 0} messages</div>
-              </div>
-            ))}
-          </div>
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 bg-gray-800/90 flex-shrink-0">
+        <div className="flex items-center space-x-2 min-w-0">
+          <MessageCircle className="h-4 w-4 text-blue-500 flex-shrink-0" />
+          <span className="font-medium text-sm truncate">Falcon-Eye Assistant</span>
         </div>
-      )}
+        <div className="flex items-center space-x-1">
+          <button onClick={onDockToggle} className="p-1.5 hover:bg-gray-700 rounded" title={isDocked ? "Undock" : "Dock"}>
+            {isDocked ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+          </button>
+          <button onClick={onToggle} className="p-1.5 hover:bg-gray-700 rounded" title="Close"><X className="h-4 w-4" /></button>
+        </div>
+      </div>
 
-      {/* Main chat area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 bg-gray-800/90">
-          <div className="flex items-center space-x-2 min-w-0">
-            <button onClick={() => setShowSessions(!showSessions)} className="p-1.5 hover:bg-gray-700 rounded" title="Chat History">
-              <List className="h-4 w-4" />
-            </button>
-            <MessageCircle className="h-4 w-4 text-blue-500 flex-shrink-0" />
-            <span className="font-medium text-sm truncate">{currentSession?.name || 'Falcon-Eye Assistant'}</span>
-          </div>
-          <div className="flex items-center space-x-1">
-            <button onClick={createNewSession} className="p-1.5 hover:bg-gray-700 rounded" title="New Chat"><Plus className="h-4 w-4" /></button>
-            <button onClick={onDockToggle} className="p-1.5 hover:bg-gray-700 rounded" title={isDocked ? "Undock" : "Dock"}>
-              {isDocked ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
-            </button>
-            <button onClick={onToggle} className="p-1.5 hover:bg-gray-700 rounded" title="Close"><X className="h-4 w-4" /></button>
-          </div>
-        </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
-          {messages.length === 0 && (
-            <div className="text-center text-gray-500 py-8">
-              <MessageCircle className="h-10 w-10 mx-auto mb-3 opacity-50" />
-              <p className="text-sm">Hi! I'm your Falcon-Eye Assistant.</p>
-              <p className="text-xs mt-1">Ask me about your cameras!</p>
-            </div>
-          )}
-          {messages.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-lg px-3 py-2 ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-100'}`}>
-                {msg.thinking ? (
-                  <div className="flex items-center space-x-2 text-sm text-gray-400"><Loader2 className="h-4 w-4 animate-spin" /><span>Getting info...</span></div>
-                ) : msg.content ? (
-                  isMediaMessage(msg) ? (
-                    <ChatMedia content={msg.content} apiUrl={API_URL} />
-                  ) : (
-                    <ChatMarkdown content={typeof msg.content === 'string' ? msg.content : ''} isUser={msg.role === 'user'} />
-                  )
-                ) : msg.role === 'assistant' && isLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : null}
-              </div>
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input */}
-        <div className="p-3 border-t border-gray-700">
-          <div className="flex items-center space-x-2">
-            <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={handleKeyPress} placeholder="Type a message..." disabled={isLoading || !chatStatus?.configured} className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50" />
-            <button onClick={sendMessage} disabled={!input.trim() || isLoading || !chatStatus?.configured} className="p-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition">
-              <Send className="h-4 w-4" />
-            </button>
-          </div>
-          {chatStatus && !chatStatus.configured && <p className="text-xs text-yellow-500 mt-2">Set ANTHROPIC_API_KEY to enable chat</p>}
-        </div>
+      {/* AgentChat fills the rest */}
+      <div className="flex-1 min-h-0">
+        {mainAgentId ? (
+          <AgentChat agentId={mainAgentId} compact />
+        ) : (
+          <div className="flex items-center justify-center h-full text-gray-500 text-sm">Loading agent...</div>
+        )}
       </div>
     </div>
   )

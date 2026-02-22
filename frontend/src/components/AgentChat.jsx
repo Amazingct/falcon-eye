@@ -12,7 +12,7 @@ const isMediaMessage = (msg) => {
   return typeof msg.content === 'object' && msg.content && Array.isArray(msg.content.media)
 }
 
-export default function AgentChat() {
+export default function AgentChat({ agentId: propAgentId, compact = false }) {
   const [agents, setAgents] = useState([])
   const [selectedAgent, setSelectedAgent] = useState(null)
   const [sessions, setSessions] = useState([])
@@ -23,20 +23,26 @@ export default function AgentChat() {
   const [sendingMsg, setSendingMsg] = useState(false)
   const messagesEndRef = useRef(null)
 
-  // Fetch agents
+  // Fetch agents (skip if agentId prop provided)
   useEffect(() => {
+    if (propAgentId) {
+      setSelectedAgent({ id: propAgentId })
+      return
+    }
     authFetch(`${API_URL}/agents/`).then(r => r.json()).then(d => {
       const agentList = d.agents || []
       setAgents(agentList)
       if (agentList.length > 0 && !selectedAgent) setSelectedAgent(agentList[0])
     }).catch(() => {})
-  }, [])
+  }, [propAgentId])
 
   // Fetch sessions when agent changes
   useEffect(() => {
     if (!selectedAgent) return
     authFetch(`${API_URL}/chat/${selectedAgent.id}/sessions`).then(r => r.json()).then(d => {
-      setSessions(d.sessions || [])
+      const list = d.sessions || []
+      setSessions(list)
+      if (list.length > 0 && !selectedSession) setSelectedSession(list[0].session_id)
     }).catch(() => {})
   }, [selectedAgent])
 
@@ -129,8 +135,9 @@ export default function AgentChat() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-180px)] bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
-      {/* Left sidebar: agent + sessions */}
+    <div className={`flex ${compact ? 'h-full' : 'h-[calc(100vh-180px)] rounded-lg border border-gray-700'} bg-gray-800 overflow-hidden`}>
+      {/* Left sidebar: agent + sessions (hidden in compact/propAgentId mode) */}
+      {!compact && !propAgentId && (
       <div className="w-64 border-r border-gray-700 flex flex-col flex-shrink-0">
         {/* Agent selector */}
         <div className="p-3 border-b border-gray-700">
@@ -171,15 +178,18 @@ export default function AgentChat() {
           )}
         </div>
       </div>
+      )}
 
       {/* Chat area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
+        {!compact && (
         <div className="px-4 py-3 border-b border-gray-700 flex items-center space-x-2">
           <Bot className="h-5 w-5 text-blue-500" />
           <span className="font-medium">{selectedAgent?.name || 'Select an agent'}</span>
           {selectedSession && <span className="text-xs text-gray-500">Session: {selectedSession.slice(0, 8)}</span>}
         </div>
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
