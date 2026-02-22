@@ -5,7 +5,9 @@ function encodePathPreserveSlashes(p) {
   return p.split('/').map(encodeURIComponent).join('/')
 }
 
-function resolveMediaUrl(apiUrl, path) {
+function resolveMediaUrl(apiUrl, path, cloudUrl) {
+  // Prefer cloud URL when available (already a full https:// URL)
+  if (cloudUrl) return cloudUrl
   if (!path) return ''
   if (path.startsWith('http://') || path.startsWith('https://')) return path
   if (path.startsWith('/')) return path
@@ -49,7 +51,7 @@ export default function ChatMedia({ content, apiUrl }) {
       <div className="grid grid-cols-1 gap-2">
         {items.map((item, idx) => {
           const ext = extLower(item)
-          const url = resolveMediaUrl(apiUrl, item?.path || '')
+          const url = resolveMediaUrl(apiUrl, item?.path || '', item?.cloud_url)
           const caption = item?.caption ?? null
           const name = item?.name ?? null
           const cam = item?.cam ?? null

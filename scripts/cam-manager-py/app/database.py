@@ -56,6 +56,10 @@ async def init_db():
             "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content_type VARCHAR(20)",
             "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content_text TEXT",
             "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS content_media JSONB",
+
+            # Recording cloud upload fields
+            "ALTER TABLE recordings ADD COLUMN IF NOT EXISTS cloud_url VARCHAR",
+            "ALTER TABLE recordings ADD COLUMN IF NOT EXISTS camera_info JSONB",
         ]
         for sql in migrations:
             try:

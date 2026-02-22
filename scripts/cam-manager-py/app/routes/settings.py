@@ -30,6 +30,17 @@ class ChatbotSettings(BaseModel):
     available_tools: list[str]
 
 
+class CloudStorageSettings(BaseModel):
+    enabled: bool = False
+    provider: str = "spaces"  # "s3" | "spaces"
+    access_key: str = ""
+    secret_key: str = ""
+    bucket: str = ""
+    region: str = ""
+    endpoint: str = ""
+    delete_local: bool = True
+
+
 class SettingsResponse(BaseModel):
     default_resolution: str
     default_framerate: int
@@ -38,8 +49,10 @@ class SettingsResponse(BaseModel):
     k8s_namespace: str
     cleanup_interval: str
     creating_timeout_minutes: int
+    recording_chunk_minutes: int
     node_ips: dict[str, str]
     chatbot: ChatbotSettings
+    cloud_storage: CloudStorageSettings
 
 
 class SettingsUpdate(BaseModel):
@@ -49,9 +62,11 @@ class SettingsUpdate(BaseModel):
     default_recorder_node: Optional[str] = None
     cleanup_interval: Optional[str] = None
     creating_timeout_minutes: Optional[int] = None
+    recording_chunk_minutes: Optional[int] = None
     anthropic_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     chatbot_tools: Optional[list[str]] = None
+    cloud_storage: Optional[CloudStorageSettings] = None
 
 
 class RestartResponse(BaseModel):
@@ -220,12 +235,23 @@ async def get_current_settings():
         k8s_namespace=settings.k8s_namespace,
         cleanup_interval=cm.get("CLEANUP_INTERVAL", "*/2 * * * *"),
         creating_timeout_minutes=int(cm.get("CREATING_TIMEOUT_MINUTES", "15")),
+        recording_chunk_minutes=int(cm.get("RECORDING_CHUNK_MINUTES", "15")),
         node_ips=settings.node_ips,
         chatbot=ChatbotSettings(
             api_key_configured=bool(cm.get("ANTHROPIC_API_KEY")),
             openai_key_configured=bool(cm.get("OPENAI_API_KEY")),
             enabled_tools=enabled_tools,
             available_tools=list(AVAILABLE_TOOLS.keys()),
+        ),
+        cloud_storage=CloudStorageSettings(
+            enabled=cm.get("CLOUD_STORAGE_ENABLED", "false").lower() == "true",
+            provider=cm.get("CLOUD_STORAGE_PROVIDER", "spaces"),
+            access_key=cm.get("CLOUD_STORAGE_ACCESS_KEY", ""),
+            secret_key=cm.get("CLOUD_STORAGE_SECRET_KEY", ""),
+            bucket=cm.get("CLOUD_STORAGE_BUCKET", ""),
+            region=cm.get("CLOUD_STORAGE_REGION", ""),
+            endpoint=cm.get("CLOUD_STORAGE_ENDPOINT", ""),
+            delete_local=cm.get("CLOUD_DELETE_LOCAL", "true").lower() == "true",
         ),
     )
 
@@ -248,8 +274,21 @@ async def update_settings(update: SettingsUpdate, background_tasks: BackgroundTa
         cm["CLEANUP_INTERVAL"] = update.cleanup_interval
     if update.creating_timeout_minutes:
         cm["CREATING_TIMEOUT_MINUTES"] = str(update.creating_timeout_minutes)
+    if update.recording_chunk_minutes is not None:
+        val = max(5, min(60, update.recording_chunk_minutes))
+        cm["RECORDING_CHUNK_MINUTES"] = str(val)
     if update.chatbot_tools is not None:
         cm["CHATBOT_TOOLS"] = ",".join(update.chatbot_tools)
+    if update.cloud_storage is not None:
+        cs = update.cloud_storage
+        cm["CLOUD_STORAGE_ENABLED"] = str(cs.enabled).lower()
+        cm["CLOUD_STORAGE_PROVIDER"] = cs.provider
+        cm["CLOUD_STORAGE_ACCESS_KEY"] = cs.access_key
+        cm["CLOUD_STORAGE_SECRET_KEY"] = cs.secret_key
+        cm["CLOUD_STORAGE_BUCKET"] = cs.bucket
+        cm["CLOUD_STORAGE_REGION"] = cs.region
+        cm["CLOUD_STORAGE_ENDPOINT"] = cs.endpoint
+        cm["CLOUD_DELETE_LOCAL"] = str(cs.delete_local).lower()
 
     # API keys — validate then write directly into the ConfigMap
     if update.anthropic_api_key:

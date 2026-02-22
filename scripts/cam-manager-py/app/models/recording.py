@@ -1,5 +1,5 @@
 """Recording model for video recordings"""
-from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, Enum as SQLEnum, Boolean
+from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, Enum as SQLEnum, Boolean, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -16,6 +16,8 @@ class RecordingStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     ERROR = "error"
+    UPLOADING = "uploading"
+    UPLOADED = "uploaded"
 
 
 class Recording(Base):
@@ -35,6 +37,8 @@ class Recording(Base):
     error_message = Column(String, nullable=True)
     node_name = Column(String, nullable=True)  # K8s node where the recording was stored
     camera_deleted = Column(Boolean, default=False, nullable=False)  # True if associated camera was deleted
+    cloud_url = Column(String, nullable=True)  # S3/Spaces URL after upload
+    camera_info = Column(JSON, nullable=True)  # Camera metadata snapshot at recording time
     
     # Relationship to camera (nullable - camera may be deleted)
     camera = relationship("Camera", back_populates="recordings")
@@ -54,4 +58,6 @@ class Recording(Base):
             "error_message": self.error_message,
             "node_name": self.node_name,
             "camera_deleted": self.camera_deleted,
+            "cloud_url": self.cloud_url,
+            "camera_info": self.camera_info,
         }

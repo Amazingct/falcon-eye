@@ -839,6 +839,106 @@ EOF
     fi
 }
 
+# Deploy Redis
+deploy_redis() {
+    echo -e "${YELLOW}[5.5/9] Deploying Redis...${NC}"
+    
+    cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+EOF
+    
+    echo -e "${GREEN}✓ Redis configured${NC}"
+}
+
+# Deploy Celery worker
+deploy_celery_worker() {
+    echo -e "${YELLOW}[5.6/9] Deploying Celery worker...${NC}"
+    
+    cat <<EOF | kubectl apply -n ${NAMESPACE} -f -
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: falcon-eye-celery-worker
+  annotations:
+    falcon-eye/updated: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: falcon-eye-celery-worker
+  template:
+    metadata:
+      labels:
+        app: falcon-eye-celery-worker
+      annotations:
+        falcon-eye/updated: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    spec:
+      containers:
+      - name: worker
+        image: ${REGISTRY}/${REPO_OWNER}/falcon-eye-api:latest
+        imagePullPolicy: ${IMAGE_PULL_POLICY}
+        command: ["celery", "-A", "app.worker", "worker", "--loglevel=info", "--concurrency=2"]
+        envFrom:
+        - configMapRef:
+            name: falcon-eye-config
+        volumeMounts:
+        - name: recordings
+          mountPath: /recordings
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: recordings
+        hostPath:
+          path: /data/falcon-eye/recordings
+          type: DirectoryOrCreate
+EOF
+    
+    echo -e "${GREEN}✓ Celery worker configured${NC}"
+}
+
 # Deploy Falcon-Eye backend
 deploy_backend() {
     echo -e "${YELLOW}[6/9] Deploying Falcon-Eye API...${NC}"
@@ -851,9 +951,11 @@ metadata:
   name: falcon-eye-config
 data:
   DATABASE_URL: "postgresql://falcon:falcon-eye-2026@postgres:5432/falconeye"
+  REDIS_URL: "redis://redis:6379/0"
   NODE_ENV: "production"
   CLEANUP_INTERVAL: "*/2 * * * *"
   CREATING_TIMEOUT_MINUTES: "15"
+  RECORDING_CHUNK_MINUTES: "15"
   DEFAULT_RESOLUTION: "640x480"
   DEFAULT_FRAMERATE: "15"
   ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
@@ -861,6 +963,14 @@ data:
   INTERNAL_API_KEY: "${INTERNAL_KEY:-}"
   DEFAULT_CAMERA_NODE: "${CAMERA_NODE:-}"
   DEFAULT_RECORDER_NODE: "${RECORDER_NODE:-}"
+  CLOUD_STORAGE_ENABLED: "false"
+  CLOUD_STORAGE_PROVIDER: "spaces"
+  CLOUD_STORAGE_ACCESS_KEY: ""
+  CLOUD_STORAGE_SECRET_KEY: ""
+  CLOUD_STORAGE_BUCKET: ""
+  CLOUD_STORAGE_REGION: ""
+  CLOUD_STORAGE_ENDPOINT: ""
+  CLOUD_DELETE_LOCAL: "true"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1230,6 +1340,7 @@ restart_all_on_upgrade() {
     # Core deployments
     patch_and_restart_deploy "falcon-eye-api" "${NAMESPACE}"
     patch_and_restart_deploy "falcon-eye-dashboard" "${NAMESPACE}"
+    patch_and_restart_deploy "falcon-eye-celery-worker" "${NAMESPACE}"
 
     # File-server DaemonSet
     DS_CONTAINER=$(kubectl get daemonset/falcon-eye-file-server -n ${NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null)
@@ -1411,7 +1522,9 @@ main() {
         build_local_images
     fi
     deploy_database
+    deploy_redis
     deploy_backend
+    deploy_celery_worker
     deploy_frontend
     deploy_file_server
     deploy_cleanup_cronjob

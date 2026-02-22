@@ -27,6 +27,7 @@ STREAM_URL = os.getenv("STREAM_URL", "")
 RECORDINGS_PATH = os.getenv("RECORDINGS_PATH", "/recordings")
 API_URL = os.getenv("API_URL", "http://falcon-eye-api:8000")
 SEGMENT_DURATION = int(os.getenv("SEGMENT_DURATION", "3600"))
+RECORDING_CHUNK_MINUTES = int(os.getenv("RECORDING_CHUNK_MINUTES", "15"))
 NODE_NAME = os.getenv("NODE_NAME", "")
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
 
@@ -41,6 +42,8 @@ def _api_headers() -> dict:
 current_process: Optional[subprocess.Popen] = None
 current_recording: Optional[dict] = None
 _monitor_task: Optional[asyncio.Task] = None
+_chunk_task: Optional[asyncio.Task] = None
+_stop_requested: bool = False
 recording_lock = asyncio.Lock()
 
 
@@ -124,9 +127,79 @@ async def notify_api_failed(recording_id: str, error_message: str):
         logger.warning("Failed to notify API of recording failure: %s", e)
 
 
+async def _finalize_chunk(recording_info: dict):
+    """Report a completed chunk to the API."""
+    end_time = datetime.utcnow()
+    file_size = 0
+    fp = recording_info.get("file_path")
+    if fp and os.path.exists(fp):
+        file_size = os.path.getsize(fp)
+    if recording_info.get("id"):
+        await notify_api_stop(recording_info["id"], end_time, file_size)
+
+
+async def _start_new_chunk() -> bool:
+    """Start a new FFmpeg chunk. Returns True on success."""
+    global current_process, current_recording, _monitor_task
+
+    if not STREAM_URL:
+        return False
+
+    recording_dir = os.path.join(RECORDINGS_PATH, CAMERA_ID)
+    Path(recording_dir).mkdir(parents=True, exist_ok=True)
+
+    file_path, file_name = generate_filename()
+    start_time = datetime.utcnow()
+    recording_id = f"{CAMERA_ID}_{start_time.strftime('%Y%m%d%H%M%S')}"
+    log_path = file_path + ".log"
+
+    chunk_seconds = RECORDING_CHUNK_MINUTES * 60
+
+    is_http = STREAM_URL.startswith("http://") or STREAM_URL.startswith("https://")
+    is_mjpeg = STREAM_URL.endswith("/") or "mjpeg" in STREAM_URL.lower() or "mjpg" in STREAM_URL.lower()
+    frag_movflags = "frag_keyframe+empty_moov+default_base_moof"
+
+    if is_mjpeg:
+        cmd = [
+            "ffmpeg", "-y", "-f", "mjpeg", "-i", STREAM_URL,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-t", str(chunk_seconds), "-movflags", frag_movflags, "-f", "mp4", file_path,
+        ]
+    elif is_http:
+        cmd = [
+            "ffmpeg", "-y", "-i", STREAM_URL,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "64k",
+            "-t", str(chunk_seconds), "-movflags", frag_movflags, "-f", "mp4", file_path,
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y", "-rtsp_transport", "tcp", "-i", STREAM_URL,
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "64k",
+            "-t", str(chunk_seconds), "-movflags", frag_movflags, "-f", "mp4", file_path,
+        ]
+
+    logger.info("Starting FFmpeg chunk: %s", " ".join(cmd))
+    log_fh = open(log_path, "w")
+    current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_fh)
+
+    current_recording = {
+        "id": recording_id,
+        "file_path": file_path,
+        "file_name": file_name,
+        "start_time": start_time.isoformat(),
+        "log_path": log_path,
+        "log_fh": log_fh,
+    }
+
+    asyncio.create_task(notify_api_start(recording_id, file_path, file_name, start_time))
+    _monitor_task = asyncio.create_task(monitor_ffmpeg_process(recording_id, log_path))
+    return True
+
+
 async def monitor_ffmpeg_process(recording_id: str, log_path: str):
-    """Continuously monitor the FFmpeg process. Reports crashes to the API."""
-    global current_process, current_recording
+    """Continuously monitor the FFmpeg process. On normal exit (chunk complete), starts next chunk."""
+    global current_process, current_recording, _stop_requested
 
     await asyncio.sleep(3)
 
@@ -134,25 +207,36 @@ async def monitor_ffmpeg_process(recording_id: str, log_path: str):
         while current_process is not None:
             exit_code = current_process.poll()
             if exit_code is not None:
-                # Close log file handle if still open
-                if current_recording:
-                    log_fh = current_recording.get("log_fh")
-                    if log_fh:
-                        try:
-                            log_fh.close()
-                        except Exception:
-                            pass
+                recording_info = dict(current_recording) if current_recording else {}
 
-                stderr_tail = ""
-                try:
-                    with open(log_path, "r") as f:
-                        stderr_tail = f.read()[-1000:]
-                except Exception:
-                    stderr_tail = "(could not read ffmpeg log)"
+                # Close log file handle
+                log_fh = recording_info.get("log_fh")
+                if log_fh:
+                    try:
+                        log_fh.close()
+                    except Exception:
+                        pass
 
                 if exit_code == 0:
-                    logger.info("FFmpeg finished normally for recording %s", recording_id)
+                    logger.info("FFmpeg chunk finished normally for recording %s", recording_id)
+                    await _finalize_chunk(recording_info)
+
+                    # If not explicitly stopped, start the next chunk
+                    if not _stop_requested:
+                        current_process = None
+                        current_recording = None
+                        logger.info("Starting next chunk...")
+                        ok = await _start_new_chunk()
+                        if not ok:
+                            logger.error("Failed to start next chunk")
+                        return
                 else:
+                    stderr_tail = ""
+                    try:
+                        with open(log_path, "r") as f:
+                            stderr_tail = f.read()[-1000:]
+                    except Exception:
+                        stderr_tail = "(could not read ffmpeg log)"
                     logger.error("FFmpeg crashed (code %d) for %s: %s", exit_code, recording_id, stderr_tail)
                     await notify_api_failed(recording_id, f"FFmpeg exited with code {exit_code}: {stderr_tail}")
 
@@ -196,8 +280,8 @@ async def get_status() -> RecordingInfo:
 
 @app.post("/start")
 async def start_recording() -> StartResponse:
-    """Start recording"""
-    global current_process, current_recording, _monitor_task
+    """Start recording (chunked — each chunk is RECORDING_CHUNK_MINUTES long)"""
+    global current_process, current_recording, _monitor_task, _stop_requested
 
     async with recording_lock:
         if current_process and current_process.poll() is None:
@@ -210,94 +294,21 @@ async def start_recording() -> StartResponse:
         if not STREAM_URL:
             raise HTTPException(status_code=400, detail="No stream URL configured")
 
-        recording_dir = os.path.join(RECORDINGS_PATH, CAMERA_ID)
-        Path(recording_dir).mkdir(parents=True, exist_ok=True)
-
-        file_path, file_name = generate_filename()
-        start_time = datetime.utcnow()
-        recording_id = f"{CAMERA_ID}_{start_time.strftime('%Y%m%d%H%M%S')}"
-
-        # FFmpeg stderr log — written to a file to avoid pipe buffer deadlock
-        log_path = file_path + ".log"
-
-        is_http = STREAM_URL.startswith("http://") or STREAM_URL.startswith("https://")
-        is_mjpeg = STREAM_URL.endswith("/") or "mjpeg" in STREAM_URL.lower() or "mjpg" in STREAM_URL.lower()
-
-        # Use frag_keyframe+empty_moov so the file is playable even if
-        # ffmpeg is killed mid-recording (moov atom is at the start).
-        frag_movflags = "frag_keyframe+empty_moov+default_base_moof"
-
-        if is_mjpeg:
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "mjpeg",
-                "-i", STREAM_URL,
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "23",
-                "-t", str(SEGMENT_DURATION),
-                "-movflags", frag_movflags,
-                "-f", "mp4",
-                file_path,
-            ]
-        elif is_http:
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", STREAM_URL,
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "23",
-                "-c:a", "aac", "-b:a", "64k",
-                "-t", str(SEGMENT_DURATION),
-                "-movflags", frag_movflags,
-                "-f", "mp4",
-                file_path,
-            ]
-        else:
-            cmd = [
-                "ffmpeg", "-y",
-                "-rtsp_transport", "tcp",
-                "-i", STREAM_URL,
-                "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "64k",
-                "-t", str(SEGMENT_DURATION),
-                "-movflags", frag_movflags,
-                "-f", "mp4",
-                file_path,
-            ]
+        _stop_requested = False
 
         try:
-            logger.info("Starting FFmpeg: %s", " ".join(cmd))
-
-            # CRITICAL: redirect stderr to a log file instead of PIPE.
-            # Piped stderr fills the OS buffer (~64KB), which blocks ffmpeg,
-            # causing the recording to stall and the file to be corrupted.
-            log_fh = open(log_path, "w")
-            current_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=log_fh,
-            )
-
-            current_recording = {
-                "id": recording_id,
-                "file_path": file_path,
-                "file_name": file_name,
-                "start_time": start_time.isoformat(),
-                "log_path": log_path,
-                "log_fh": log_fh,
-            }
-
-            asyncio.create_task(notify_api_start(recording_id, file_path, file_name, start_time))
-
-            _monitor_task = asyncio.create_task(monitor_ffmpeg_process(recording_id, log_path))
+            ok = await _start_new_chunk()
+            if not ok:
+                raise HTTPException(status_code=500, detail="Failed to start recording chunk")
 
             return StartResponse(
                 success=True,
-                message="Recording started",
+                message=f"Recording started (chunk duration: {RECORDING_CHUNK_MINUTES} min)",
                 recording=await get_status(),
             )
 
+        except HTTPException:
+            raise
         except Exception as e:
             current_process = None
             current_recording = None
@@ -307,12 +318,13 @@ async def start_recording() -> StartResponse:
 @app.post("/stop")
 async def stop_recording() -> StopResponse:
     """Stop recording"""
-    global current_process, current_recording, _monitor_task
+    global current_process, current_recording, _monitor_task, _stop_requested
 
     async with recording_lock:
         if not current_process:
             return StopResponse(success=False, message="Not recording")
 
+        _stop_requested = True
         recording_info = dict(current_recording) if current_recording else {}
 
         try:

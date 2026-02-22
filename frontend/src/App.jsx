@@ -1467,9 +1467,18 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
           default_recorder_node: data.default_recorder_node || '',
           cleanup_interval: data.cleanup_interval,
           creating_timeout_minutes: data.creating_timeout_minutes,
+          recording_chunk_minutes: data.recording_chunk_minutes || 15,
           chatbot_tools: data.chatbot?.enabled_tools || [],
           anthropic_api_key: '',
           openai_api_key: '',
+          cloud_storage_enabled: data.cloud_storage?.enabled || false,
+          cloud_storage_provider: data.cloud_storage?.provider || 'spaces',
+          cloud_storage_access_key: data.cloud_storage?.access_key || '',
+          cloud_storage_secret_key: data.cloud_storage?.secret_key || '',
+          cloud_storage_bucket: data.cloud_storage?.bucket || '',
+          cloud_storage_region: data.cloud_storage?.region || '',
+          cloud_storage_endpoint: data.cloud_storage?.endpoint || '',
+          cloud_delete_local: data.cloud_storage?.delete_local ?? true,
         })
       } catch (err) {
         setError(err.message)
@@ -1542,6 +1551,7 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
 
   const navSections = [
     { id: 'camera', label: 'Camera Settings', icon: Camera, description: 'Defaults & timers' },
+    { id: 'recording_settings', label: 'Recordings', icon: Film, description: 'Chunking & cloud storage' },
     { id: 'nodes', label: 'Nodes & Cluster', icon: Server, description: 'Kubernetes management' },
     { id: 'agents', label: 'Agents', icon: Bot, description: 'AI agents & API key' },
     { id: 'chatbot', label: 'Chatbot', icon: Bot, description: 'AI assistant tools' },
@@ -1757,6 +1767,159 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
               )}
 
               {/* ── Nodes & Cluster Management ── */}
+              {/* ── Recording Settings ── */}
+              {activeSection === 'recording_settings' && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="text-2xl font-bold">Recording Settings</h2>
+                    <p className="text-gray-400 mt-1">Configure recording chunking and cloud storage</p>
+                  </div>
+
+                  {/* Chunk Duration */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Recording Chunking</h3>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">Chunk Duration (minutes)</label>
+                      <input
+                        type="number"
+                        value={form.recording_chunk_minutes}
+                        onChange={e => setForm({ ...form, recording_chunk_minutes: parseInt(e.target.value) || 15 })}
+                        min="5"
+                        max="60"
+                        className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                      />
+                      <p className="text-xs text-gray-500 mt-1.5">Recordings are split into chunks of this duration (5–60 minutes). Each chunk is a separate file.</p>
+                    </div>
+                  </div>
+
+                  {/* Cloud Storage */}
+                  <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-6">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Cloud Storage</h3>
+                      <label className="flex items-center space-x-2 cursor-pointer">
+                        <span className="text-sm text-gray-400">{form.cloud_storage_enabled ? 'Enabled' : 'Disabled'}</span>
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={form.cloud_storage_enabled}
+                            onChange={e => setForm({ ...form, cloud_storage_enabled: e.target.checked })}
+                            className="sr-only peer"
+                          />
+                          <div className={`w-10 h-6 rounded-full transition-colors ${form.cloud_storage_enabled ? 'bg-blue-600' : 'bg-gray-600'}`} />
+                          <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${form.cloud_storage_enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                        </div>
+                      </label>
+                    </div>
+
+                    {form.cloud_storage_enabled && (
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">Provider</label>
+                          <select
+                            value={form.cloud_storage_provider}
+                            onChange={e => setForm({ ...form, cloud_storage_provider: e.target.value })}
+                            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                          >
+                            <option value="spaces">DigitalOcean Spaces</option>
+                            <option value="s3">AWS S3</option>
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Access Key</label>
+                            <input
+                              type="text"
+                              value={form.cloud_storage_access_key}
+                              onChange={e => setForm({ ...form, cloud_storage_access_key: e.target.value })}
+                              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Secret Key</label>
+                            <input
+                              type="password"
+                              value={form.cloud_storage_secret_key}
+                              onChange={e => setForm({ ...form, cloud_storage_secret_key: e.target.value })}
+                              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm font-mono"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Bucket</label>
+                            <input
+                              type="text"
+                              value={form.cloud_storage_bucket}
+                              onChange={e => setForm({ ...form, cloud_storage_bucket: e.target.value })}
+                              placeholder="my-bucket"
+                              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">
+                              {form.cloud_storage_provider === 's3' ? 'Region' : 'Endpoint'}
+                            </label>
+                            {form.cloud_storage_provider === 's3' ? (
+                              <input
+                                type="text"
+                                value={form.cloud_storage_region}
+                                onChange={e => setForm({ ...form, cloud_storage_region: e.target.value })}
+                                placeholder="us-east-1"
+                                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                              />
+                            ) : (
+                              <input
+                                type="text"
+                                value={form.cloud_storage_endpoint}
+                                onChange={e => setForm({ ...form, cloud_storage_endpoint: e.target.value })}
+                                placeholder="nyc3.digitaloceanspaces.com"
+                                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 focus:outline-none focus:border-blue-500 text-sm"
+                              />
+                            )}
+                          </div>
+                        </div>
+
+                        <label className="flex items-center space-x-3 bg-gray-700/50 rounded-lg px-4 py-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={form.cloud_delete_local}
+                            onChange={e => setForm({ ...form, cloud_delete_local: e.target.checked })}
+                            className="rounded bg-gray-600 border-gray-500 text-blue-500"
+                          />
+                          <div>
+                            <p className="text-sm font-medium">Delete local file after upload</p>
+                            <p className="text-xs text-gray-500">Saves disk space by removing local copies once uploaded to cloud</p>
+                          </div>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => saveSettings({
+                      recording_chunk_minutes: form.recording_chunk_minutes,
+                      cloud_storage: {
+                        enabled: form.cloud_storage_enabled,
+                        provider: form.cloud_storage_provider,
+                        access_key: form.cloud_storage_access_key,
+                        secret_key: form.cloud_storage_secret_key,
+                        bucket: form.cloud_storage_bucket,
+                        region: form.cloud_storage_region,
+                        endpoint: form.cloud_storage_endpoint,
+                        delete_local: form.cloud_delete_local,
+                      },
+                    })}
+                    disabled={saving}
+                    className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 px-6 py-2.5 rounded-lg transition font-medium"
+                  >
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    <span>{saving ? 'Saving…' : 'Save Recording Settings'}</span>
+                  </button>
+                </div>
+              )}
+
               {activeSection === 'nodes' && (
                 <div className="space-y-8">
                   <div>
@@ -2544,7 +2707,7 @@ function RecordingsPage({ cameras }) {
             <div className="aspect-video bg-black">
               <video
                 key={selectedRecording.id}
-                src={`${API_URL}/recordings/${selectedRecording.id}/download`}
+                src={selectedRecording.cloud_url || `${API_URL}/recordings/${selectedRecording.id}/download`}
                 controls
                 autoPlay
                 className="w-full h-full"
@@ -2659,9 +2822,18 @@ function RecordingsPage({ cameras }) {
                         </div>
                       </div>
                       <div className="flex items-center space-x-2">
+                        {/* Cloud status indicator */}
+                        {rec.cloud_url ? (
+                          <span className="text-xs" title={`Cloud: ${rec.cloud_url}`}>☁️</span>
+                        ) : rec.status === 'UPLOADING' || rec.status === 'uploading' ? (
+                          <span className="text-xs animate-pulse" title="Uploading to cloud">⏳</span>
+                        ) : (
+                          <span className="text-xs" title="Local only">💾</span>
+                        )}
                         <span className={`px-2 py-1 text-xs rounded ${
                           rec.status === 'recording' ? 'bg-red-500/20 text-red-400' :
-                          rec.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                          rec.status === 'completed' || rec.status === 'UPLOADED' || rec.status === 'uploaded' ? 'bg-green-500/20 text-green-400' :
+                          rec.status === 'UPLOADING' || rec.status === 'uploading' ? 'bg-blue-500/20 text-blue-400' :
                           'bg-gray-500/20 text-gray-400'
                         }`}>
                           {rec.status}
@@ -2676,7 +2848,9 @@ function RecordingsPage({ cameras }) {
                               <Play className="h-4 w-4" />
                             </button>
                             <a
-                              href={authUrl(`${API_URL}/recordings/${rec.id}/download`)}
+                              href={rec.cloud_url || authUrl(`${API_URL}/recordings/${rec.id}/download`)}
+                              target={rec.cloud_url ? '_blank' : undefined}
+                              rel={rec.cloud_url ? 'noopener noreferrer' : undefined}
                               className="p-2 hover:bg-gray-600 rounded-lg transition text-green-400"
                               title="Download"
                             >

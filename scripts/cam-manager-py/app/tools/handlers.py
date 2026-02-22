@@ -149,7 +149,8 @@ async def list_recordings(camera_id: str = None, **kwargs) -> str:
     summary = []
     for r in recs:
         dur = f"{r.get('duration_seconds', '?')}s" if r.get("duration_seconds") else "in progress"
-        summary.append(f"- {r['file_name']} ({r['status']}, {dur})")
+        cloud = " ☁️" if r.get("cloud_url") else ""
+        summary.append(f"- {r['file_name']} ({r['status']}, {dur}{cloud}) [id: {r['id']}]")
     return f"Found {len(recs)} recordings:\n" + "\n".join(summary)
 
 

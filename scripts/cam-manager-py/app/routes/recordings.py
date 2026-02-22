@@ -1,6 +1,6 @@
 """Recordings API routes"""
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
 from pydantic import BaseModel
@@ -52,6 +52,8 @@ class RecordingResponse(BaseModel):
     error_message: Optional[str] = None
     node_name: Optional[str] = None
     camera_deleted: bool = False
+    cloud_url: Optional[str] = None
+    camera_info: Optional[dict] = None
     
     class Config:
         from_attributes = True
@@ -175,6 +177,17 @@ async def update_recording(
         )
         await db.commit()
     
+    # Trigger cloud upload if recording completed/stopped and cloud storage enabled
+    if data.status in ("completed", "stopped"):
+        try:
+            cloud_enabled = os.getenv("CLOUD_STORAGE_ENABLED", "false").lower() == "true"
+            redis_url = os.getenv("REDIS_URL", "")
+            if cloud_enabled and redis_url:
+                from app.worker import upload_recording_to_cloud
+                upload_recording_to_cloud.delay(recording_id)
+        except Exception as e:
+            print(f"Failed to queue cloud upload for {recording_id}: {e}")
+    
     # Refresh and return
     result = await db.execute(
         select(Recording).where(Recording.id == recording_id)
@@ -278,11 +291,15 @@ async def download_recording(
     if not recording:
         raise HTTPException(status_code=404, detail="Recording not found")
     
-    if not recording.file_path:
+    if not recording.file_path and not recording.cloud_url:
         raise HTTPException(status_code=404, detail="No file path for this recording")
     
+    # 0. If cloud URL is set and local file is gone, redirect to cloud
+    if recording.cloud_url and (not recording.file_path or not os.path.exists(recording.file_path)):
+        return RedirectResponse(url=recording.cloud_url, status_code=302)
+    
     # 1. Try local file first (same node or shared storage)
-    if os.path.exists(recording.file_path):
+    if recording.file_path and os.path.exists(recording.file_path):
         return FileResponse(
             recording.file_path,
             media_type="video/mp4",

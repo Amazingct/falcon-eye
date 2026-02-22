@@ -162,6 +162,8 @@ def generate_recorder_deployment(camera: Camera, stream_url: str) -> tuple[dict,
                                     "fieldRef": {"fieldPath": "spec.nodeName"},
                                 },
                             },
+                            {"name": "RECORDING_CHUNK_MINUTES", "value": os.getenv("RECORDING_CHUNK_MINUTES", "15")},
+                            {"name": "INTERNAL_API_KEY", "value": os.getenv("INTERNAL_API_KEY", "")},
                         ],
                         "volumeMounts": [{
                             "name": "recordings",
