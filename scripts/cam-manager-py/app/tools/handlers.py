@@ -887,11 +887,20 @@ PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
 
 async def send_media(path: str, caption: str = "", media_type: str = "auto", **kwargs) -> str:
-    """Queue a file from the shared filesystem for delivery to the user's chat."""
+    """Queue a file or URL for delivery to the user's chat.
+    Accepts: filesystem paths (e.g. 'snapshots/file.jpg'), API paths (e.g. '/api/recordings/{id}/download'),
+    or full URLs (e.g. 'https://...')."""
     try:
-        info = await _api_get(f"/api/files/info/{path}")
-        if info.get("is_dir"):
-            return f"Error: '{path}' is a directory, not a file."
+        # Determine if this is an API path, full URL, or filesystem path
+        is_api_path = path.startswith("/api/")
+        is_full_url = path.startswith("http://") or path.startswith("https://")
+        is_fs_path = not is_api_path and not is_full_url
+
+        info = {}
+        if is_fs_path:
+            info = await _api_get(f"/api/files/info/{path}")
+            if info.get("is_dir"):
+                return f"Error: '{path}' is a directory, not a file."
 
         if media_type == "auto":
             ext = os.path.splitext(path)[1].lower()
@@ -902,9 +911,17 @@ async def send_media(path: str, caption: str = "", media_type: str = "auto", **k
             else:
                 media_type = "document"
 
+        # Build the URL for the frontend
+        if is_full_url:
+            url = path
+        elif is_api_path:
+            url = path  # Already a valid API path
+        else:
+            url = f"/api/files/{path}"
+
         media_entry = {
             "path": path,
-            "url": f"/api/files/{path}",
+            "url": url,
             "caption": caption,
             "media_type": media_type,
             "size": info.get("size"),

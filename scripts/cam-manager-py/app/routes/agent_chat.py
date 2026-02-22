@@ -249,7 +249,11 @@ async def send_message(
             for m in pending_media:
                 # Add a URL the frontend can use
                 if "path" in m and "url" not in m:
-                    m["url"] = f"/api/files/{m['path']}"
+                    p = m["path"]
+                    if p.startswith("/api/") or p.startswith("http"):
+                        m["url"] = p
+                    else:
+                        m["url"] = f"/api/files/{p}"
                 # Wrap in {media: [...]} format expected by ChatMedia component
                 media_content = {"media": [m]}
                 media_msg = AgentChatMessage(
