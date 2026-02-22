@@ -1,4 +1,5 @@
 """Agent API routes"""
+import os
 import logging
 from uuid import UUID
 from typing import Optional
@@ -24,7 +25,7 @@ class AgentCreate(BaseModel):
     slug: str = Field(..., min_length=1, max_length=50)
     type: str = Field(default="pod")  # built-in | pod
     provider: str = Field(default="openai")
-    model: str = Field(default="gpt-4o")
+    model: str = Field(default="gpt-4.1")
     api_key_ref: Optional[str] = None
     system_prompt: Optional[str] = None
     temperature: float = Field(default=0.7, ge=0, le=2)
@@ -349,13 +350,22 @@ async def ensure_main_agent(db: AsyncSession):
             await db.commit()
             await db.refresh(agent)
     else:
+        # Auto-detect provider: prefer Anthropic if key available, else OpenAI
+        _anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if _anthropic_key:
+            _default_provider = "anthropic"
+            _default_model = "claude-sonnet-4-20250514"
+        else:
+            _default_provider = os.environ.get("LLM_PROVIDER", "openai")
+            _default_model = os.environ.get("LLM_MODEL", "gpt-4.1")
+
         agent = Agent(
             name="Main Assistant",
             slug="main",
             type="pod",
             status="stopped",
-            provider="anthropic",
-            model="claude-sonnet-4-20250514",
+            provider=_default_provider,
+            model=_default_model,
             system_prompt=MAIN_PROMPT,
             tools=MAIN_TOOLS,
         )

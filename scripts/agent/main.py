@@ -41,7 +41,7 @@ def _api_headers() -> dict:
     return h
 CHANNEL_TYPE = os.getenv("CHANNEL_TYPE", "")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "You are a Falcon-Eye AI agent.")

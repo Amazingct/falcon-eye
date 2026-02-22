@@ -673,6 +673,21 @@ configure_options() {
     fi
     [ -n "${OPENAI_API_KEY:-}" ] && echo -e "${GREEN}  ✓ OpenAI key configured${NC}" || echo -e "${YELLOW}  ⚠ Skipped${NC}"
     echo ""
+
+    # Auto-detect LLM provider based on available keys
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        LLM_PROVIDER="anthropic"
+        LLM_MODEL="claude-sonnet-4-20250514"
+        echo -e "${GREEN}  ✓ Default LLM: Anthropic (${LLM_MODEL})${NC}"
+    elif [ -n "${OPENAI_API_KEY:-}" ]; then
+        LLM_PROVIDER="openai"
+        LLM_MODEL="gpt-4.1"
+        echo -e "${GREEN}  ✓ Default LLM: OpenAI (${LLM_MODEL})${NC}"
+    else
+        LLM_PROVIDER="openai"
+        LLM_MODEL="gpt-4.1"
+        echo -e "${YELLOW}  ⚠ No API keys provided — agents will need keys configured manually${NC}"
+    fi
 }
 
 # Create namespace
@@ -957,6 +972,8 @@ data:
   RECORDING_CHUNK_MINUTES: "15"
   DEFAULT_RESOLUTION: "640x480"
   DEFAULT_FRAMERATE: "15"
+  LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
+  LLM_MODEL: "${LLM_MODEL:-gpt-4.1}"
   ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
   OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
   INTERNAL_API_KEY: "${INTERNAL_KEY:-}"
