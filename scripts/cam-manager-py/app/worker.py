@@ -84,7 +84,7 @@ def upload_recording_to_cloud(self, recording_id: str):
         try:
             headers = {}
             if api_key:
-                headers["X-API-Key"] = api_key
+                headers["X-Internal-Key"] = api_key
             resp = requests.get(api_url, headers=headers, stream=True, timeout=120)
             resp.raise_for_status()
             suffix = os.path.splitext(file_name)[1] if file_name else ".mp4"
