@@ -1,5 +1,6 @@
 """Agent chat API routes — proxies LLM calls to agent pods"""
 import asyncio
+import json
 import os
 import uuid
 import logging
@@ -242,6 +243,27 @@ async def send_message(
         assistant_msg.content_text = response_text
         assistant_msg.content_media = None
         db.add(assistant_msg)
+
+        # Save media messages to DB and resolve URLs
+        if pending_media:
+            for m in pending_media:
+                # Add a URL the frontend can use
+                if "path" in m and "url" not in m:
+                    m["url"] = f"/api/files/{m['path']}"
+                # Wrap in {media: [...]} format expected by ChatMedia component
+                media_content = {"media": [m]}
+                media_msg = AgentChatMessage(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    role="assistant_media",
+                    content=json.dumps(media_content),
+                    source=data.source,
+                )
+                media_msg.content_type = "media"
+                media_msg.content_text = m.get("caption", "")
+                media_msg.content_media = media_content
+                db.add(media_msg)
+
         await db.commit()
 
     if not _session_locks[lock_key].locked():
@@ -255,7 +277,8 @@ async def send_message(
         "completion_tokens": completion_tokens,
     }
     if pending_media:
-        resp["media"] = pending_media
+        # Wrap each item for ChatMedia format
+        resp["media"] = [{"media": [m]} for m in pending_media]
     return resp
 
 

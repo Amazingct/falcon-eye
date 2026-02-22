@@ -870,6 +870,7 @@ async def send_media(path: str, caption: str = "", media_type: str = "auto", **k
 
         media_entry = {
             "path": path,
+            "url": f"/api/files/{path}",
             "caption": caption,
             "media_type": media_type,
             "size": info.get("size"),
