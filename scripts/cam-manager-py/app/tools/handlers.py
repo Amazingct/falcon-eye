@@ -12,7 +12,10 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+import os as _os
 API_BASE = f"http://localhost:{settings.port}"
+_INTERNAL_KEY = _os.environ.get("INTERNAL_API_KEY", "")
+_INTERNAL_HEADERS = {"X-Internal-Key": _INTERNAL_KEY} if _INTERNAL_KEY else {}
 
 # Tools that ephemeral (task-based) agents must NOT inherit, to prevent
 # recursive spawning loops and unintended scheduling side-effects.
@@ -23,13 +26,13 @@ EPHEMERAL_EXCLUDED_TOOLS = {
 
 
 async def _api_get(path: str) -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, headers=_INTERNAL_HEADERS) as client:
         res = await client.get(f"{API_BASE}{path}")
         return res.json()
 
 
 async def _api_post(path: str, data: dict = None) -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, headers=_INTERNAL_HEADERS) as client:
         res = await client.post(f"{API_BASE}{path}", json=data)
         return res.json()
 
@@ -109,7 +112,7 @@ async def camera_snapshot(camera_id: str, **kwargs) -> str:
     filename = f"snapshots/{cam_slug}_{int(time.time())}.jpg"
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, headers=_INTERNAL_HEADERS) as client:
             resp = await client.post(
                 f"{API_BASE}/api/files/upload/{filename}",
                 files={"file": (os.path.basename(filename), frame, "image/jpeg")},
@@ -597,7 +600,7 @@ async def list_cron_jobs(**kwargs) -> str:
 async def delete_cron_job(cron_id: str, **kwargs) -> str:
     """Delete a cron job by ID."""
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, headers=_INTERNAL_HEADERS) as client:
             res = await client.delete(f"{API_BASE}/api/cron/{cron_id}")
             if res.status_code == 200:
                 return f"Cron job deleted (id: {cron_id})."
@@ -934,7 +937,7 @@ async def deliver_media_message(
 async def file_delete(path: str, **kwargs) -> str:
     """Delete a file from the shared agent filesystem."""
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, headers=_INTERNAL_HEADERS) as client:
             res = await client.delete(f"{API_BASE}/api/files/{path}")
             result = res.json()
         return result.get("message", f"Deleted: {path}")
