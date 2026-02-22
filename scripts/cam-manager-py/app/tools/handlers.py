@@ -51,23 +51,39 @@ async def list_cameras(**kwargs) -> str:
     return f"Found {len(cameras)} cameras:\n" + "\n".join(summary)
 
 
+async def _resolve_camera_id(camera_id: str) -> str:
+    """Resolve a camera name/slug to UUID if needed."""
+    # If it looks like a UUID, return as-is
+    if len(camera_id) == 36 and "-" in camera_id:
+        return camera_id
+    # Otherwise search by name
+    result = await _api_get("/api/cameras/")
+    for cam in result.get("cameras", []):
+        if camera_id.lower() in cam["name"].lower() or camera_id.lower() in cam.get("deployment_name", "").lower():
+            return str(cam["id"])
+    return camera_id  # fallback
+
+
 async def camera_status(camera_id: str, **kwargs) -> str:
     try:
-        result = await _api_get(f"/api/cameras/{camera_id}")
-        return f"Camera '{result['name']}' is {result['status']} (protocol: {result['protocol']}, node: {result.get('node_name', 'N/A')})"
+        resolved = await _resolve_camera_id(camera_id)
+        result = await _api_get(f"/api/cameras/{resolved}")
+        return f"Camera '{result['name']}' (id: {result['id']}) is {result['status']} (protocol: {result['protocol']}, node: {result.get('node_name', 'N/A')})"
     except Exception as e:
         return f"Error checking camera status: {e}"
 
 
 async def control_camera(camera_id: str, action: str, **kwargs) -> str:
     try:
+        camera_id = await _resolve_camera_id(camera_id)
         result = await _api_post(f"/api/cameras/{camera_id}/{action}")
         return f"Camera {action} result: {result.get('message', 'OK')}"
     except Exception as e:
         return f"Error controlling camera: {e}"
 
 
-async def camera_snapshot(camera_id: str, **kwargs) -> str:
+async def camera_snapshot(camera_id_raw: str, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id_raw)
     """Grab a single JPEG frame from a camera's MJPEG stream and save to filesystem."""
     import time
 
@@ -125,7 +141,8 @@ async def camera_snapshot(camera_id: str, **kwargs) -> str:
     return f"Snapshot saved: {filename} ({len(frame)} bytes). Use send_media to deliver it to the user."
 
 
-async def start_recording(camera_id: str, **kwargs) -> str:
+async def start_recording(camera_id_raw: str, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id_raw)
     try:
         result = await _api_post(f"/api/cameras/{camera_id}/recording/start")
         return f"Recording started: {json.dumps(result)}"
@@ -133,7 +150,8 @@ async def start_recording(camera_id: str, **kwargs) -> str:
         return f"Error starting recording: {e}"
 
 
-async def stop_recording(camera_id: str, **kwargs) -> str:
+async def stop_recording(camera_id_raw: str, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id_raw)
     try:
         result = await _api_post(f"/api/cameras/{camera_id}/recording/stop")
         return f"Recording stopped: {json.dumps(result)}"
@@ -609,7 +627,8 @@ async def delete_cron_job(cron_id: str, **kwargs) -> str:
         return f"Error deleting cron job: {e}"
 
 
-async def analyze_camera(camera_id: str, mode: str = "snapshot", duration: int = 5, **kwargs) -> str:
+async def analyze_camera(camera_id_raw: str, mode: str = "snapshot", duration: int = 5, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id_raw)
     """Capture frame(s) from a camera's MJPEG stream and analyze with vision AI.
 
     Uses pure-Python MJPEG parsing (no ffmpeg dependency). In 'clip' mode,
