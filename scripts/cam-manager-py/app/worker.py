@@ -73,9 +73,31 @@ def upload_recording_to_cloud(self, recording_id: str):
 
     file_path, file_name, camera_id = row[0], row[1], str(row[2]) if row[2] else "unknown"
 
+    temp_file = None
     if not file_path or not os.path.exists(file_path):
-        logger.error("Recording file not found: %s", file_path)
-        return
+        # File not on this node — fetch via internal API
+        import requests
+        import tempfile
+        api_key = os.getenv("INTERNAL_API_KEY", "")
+        api_url = f"http://falcon-eye-api:8000/api/recordings/{recording_id}/download"
+        logger.info("File not local, fetching from API: %s", api_url)
+        try:
+            headers = {}
+            if api_key:
+                headers["X-API-Key"] = api_key
+            resp = requests.get(api_url, headers=headers, stream=True, timeout=120)
+            resp.raise_for_status()
+            suffix = os.path.splitext(file_name)[1] if file_name else ".mp4"
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            for chunk in resp.iter_content(chunk_size=8192):
+                tmp.write(chunk)
+            tmp.close()
+            temp_file = tmp.name
+            file_path = temp_file
+            logger.info("Downloaded recording to temp file: %s", temp_file)
+        except Exception as e:
+            logger.error("Failed to fetch recording %s from API: %s", recording_id, e)
+            return
 
     # Update status to uploading
     with engine.connect() as conn:
@@ -123,8 +145,11 @@ def upload_recording_to_cloud(self, recording_id: str):
 
         logger.info("Upload complete: %s -> %s", recording_id, cloud_url)
 
-        # Delete local file if configured
-        if cloud["delete_local"] and os.path.exists(file_path):
+        # Delete local file if configured (or always delete temp files)
+        if temp_file and os.path.exists(temp_file):
+            os.remove(temp_file)
+            logger.info("Deleted temp file: %s", temp_file)
+        elif cloud["delete_local"] and os.path.exists(file_path):
             os.remove(file_path)
             logger.info("Deleted local file: %s", file_path)
 

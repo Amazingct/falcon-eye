@@ -330,7 +330,12 @@ async def process_message(message_text: str, session_id: str,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
         )
 
-        result: dict = {"response": response_text}
+        # Save media messages to DB so they persist across session loads
+        if media:
+            for m in media:
+                await save_message(session_id, "assistant_media", m, source)
+
+        result: dict = {"response": response_text, "session_id": session_id}
         if media:
             result["media"] = media
         return result

@@ -2441,12 +2441,16 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   }
 
   // Fetch sessions on mount
-  const fetchSessions = async () => {
+  const fetchSessions = async (autoSelect = false) => {
     try {
       const res = await authFetch(`${API_URL}/chat/sessions`)
       if (res.ok) {
         const data = await res.json()
-        setSessions(data.sessions || [])
+        const list = data.sessions || []
+        setSessions(list)
+        if (autoSelect && list.length > 0 && !currentSession) {
+          loadSession(list[0])
+        }
       }
     } catch (err) {
       console.error('Failed to fetch sessions:', err)
@@ -2454,7 +2458,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
   }
 
   useEffect(() => {
-    fetchSessions()
+    fetchSessions(true)
   }, [])
 
   // Handle resize drag
@@ -2574,12 +2578,24 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
       const res = await authFetch(`${API_URL}/chat/${mainAgentId}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage.content, source: 'dashboard' }),
+        body: JSON.stringify({ message: userMessage.content, source: 'dashboard', session_id: currentSession?.id }),
       })
       if (!res.ok) throw new Error('Chat request failed')
 
       const data = await res.json()
+      // Update current session from response
+      if (data.session_id) {
+        const sid = data.session_id
+        setCurrentSession(prev => prev ? { ...prev, id: sid } : { id: sid, name: 'New Chat' })
+        // Refresh sessions list if this is a new session
+        if (!currentSession?.id || currentSession.id !== sid) {
+          fetchSessions()
+        }
+      }
       setMessages(prev => [...prev, { role: 'assistant', content: data.response }])
+      if (data.media && data.media.length > 0) {
+        setMessages(prev => [...prev, ...data.media.map(m => ({ role: 'assistant_media', content: m }))])
+      }
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
     } finally {
@@ -2827,7 +2843,7 @@ function RecordingsPage({ cameras }) {
             <div className="aspect-video bg-black">
               <video
                 key={selectedRecording.id}
-                src={selectedRecording.cloud_url || `${API_URL}/recordings/${selectedRecording.id}/download`}
+                src={selectedRecording.cloud_url || authUrl(`${API_URL}/recordings/${selectedRecording.id}/download`)}
                 controls
                 autoPlay
                 className="w-full h-full"
