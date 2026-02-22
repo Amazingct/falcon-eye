@@ -15,6 +15,76 @@ from app.config import get_settings
 from app.models.recording import Recording, RecordingStatus
 
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
+settings = get_settings()
+
+
+async def _stream_from_cloud(recording: Recording):
+    """Stream a recording file from S3/Spaces through the API (for private buckets)."""
+    import boto3
+    from botocore.exceptions import ClientError
+
+    provider = os.environ.get("CLOUD_STORAGE_PROVIDER", "spaces")
+    access_key = os.environ.get("CLOUD_STORAGE_ACCESS_KEY", "")
+    secret_key = os.environ.get("CLOUD_STORAGE_SECRET_KEY", "")
+    bucket = os.environ.get("CLOUD_STORAGE_BUCKET", "")
+    region = os.environ.get("CLOUD_STORAGE_REGION", "us-east-1")
+    endpoint = os.environ.get("CLOUD_STORAGE_ENDPOINT", "")
+
+    if not access_key or not secret_key or not bucket:
+        raise HTTPException(status_code=500, detail="Cloud storage not configured")
+
+    # Build S3 client
+    s3_kwargs = {
+        "service_name": "s3",
+        "aws_access_key_id": access_key,
+        "aws_secret_access_key": secret_key,
+        "region_name": region,
+    }
+    if endpoint:
+        s3_kwargs["endpoint_url"] = f"https://{endpoint}"
+
+    s3 = boto3.client(**s3_kwargs)
+
+    # Extract the S3 key from the cloud URL
+    cloud_url = recording.cloud_url
+    # URL format: https://bucket.endpoint/key or https://endpoint/bucket/key
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(cloud_url)
+        # For DO Spaces: https://bucket.sfo3.digitaloceanspaces.com/path/to/file
+        # The key is the path without leading slash
+        s3_key = parsed.path.lstrip("/")
+        # If bucket name is in the hostname, key is just the path
+        # If bucket is in the path, strip it
+        if s3_key.startswith(f"{bucket}/"):
+            s3_key = s3_key[len(f"{bucket}/"):]
+    except Exception:
+        raise HTTPException(status_code=500, detail="Cannot parse cloud URL")
+
+    try:
+        s3_response = s3.get_object(Bucket=bucket, Key=s3_key)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="Recording not found in cloud storage")
+        raise HTTPException(status_code=500, detail=f"Cloud storage error: {e}")
+
+    content_type = s3_response.get("ContentType", "video/mp4")
+    content_length = s3_response.get("ContentLength")
+
+    def _iter_body():
+        body = s3_response["Body"]
+        while True:
+            chunk = body.read(64 * 1024)  # 64KB chunks
+            if not chunk:
+                break
+            yield chunk
+        body.close()
+
+    headers = {"Content-Disposition": f'attachment; filename="{recording.file_name}"'}
+    if content_length:
+        headers["Content-Length"] = str(content_length)
+
+    return StreamingResponse(_iter_body(), media_type=content_type, headers=headers)
 
 
 class RecordingCreate(BaseModel):
@@ -294,9 +364,9 @@ async def download_recording(
     if not recording.file_path and not recording.cloud_url:
         raise HTTPException(status_code=404, detail="No file path for this recording")
     
-    # 0. If cloud URL is set and local file is gone, redirect to cloud
+    # 0. If cloud URL is set and local file is gone, stream from cloud via API
     if recording.cloud_url and (not recording.file_path or not os.path.exists(recording.file_path)):
-        return RedirectResponse(url=recording.cloud_url, status_code=302)
+        return await _stream_from_cloud(recording)
     
     # 1. Try local file first (same node or shared storage)
     if recording.file_path and os.path.exists(recording.file_path):

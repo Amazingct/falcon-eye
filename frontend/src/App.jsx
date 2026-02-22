@@ -2616,7 +2616,7 @@ function RecordingsPage({ cameras }) {
             <div className="aspect-video bg-black">
               <video
                 key={selectedRecording.id}
-                src={selectedRecording.cloud_url || authUrl(`${API_URL}/recordings/${selectedRecording.id}/download`)}
+                src={authUrl(`${API_URL}/recordings/${selectedRecording.id}/download`)}
                 controls
                 autoPlay
                 className="w-full h-full"
@@ -2757,9 +2757,9 @@ function RecordingsPage({ cameras }) {
                               <Play className="h-4 w-4" />
                             </button>
                             <a
-                              href={rec.cloud_url || authUrl(`${API_URL}/recordings/${rec.id}/download`)}
-                              target={rec.cloud_url ? '_blank' : undefined}
-                              rel={rec.cloud_url ? 'noopener noreferrer' : undefined}
+                              href={authUrl(`${API_URL}/recordings/${rec.id}/download`)}
+                              target="_blank"
+                              rel="noopener noreferrer"
                               className="p-2 hover:bg-gray-600 rounded-lg transition text-green-400"
                               title="Download"
                             >

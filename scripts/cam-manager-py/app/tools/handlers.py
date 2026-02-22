@@ -171,7 +171,7 @@ async def list_recordings(camera_id: str = None, **kwargs) -> str:
     for r in recs:
         dur = f"{r.get('duration_seconds', '?')}s" if r.get("duration_seconds") else "in progress"
         cloud = " ☁️" if r.get("cloud_url") else ""
-        dl_url = r.get("cloud_url") or f"/api/recordings/{r['id']}/download"
+        dl_url = f"/api/recordings/{r['id']}/download"
         summary.append(f"- {r['file_name']} ({r['status']}, {dur}{cloud}) [id: {r['id']}] download: {dl_url}")
     return f"Found {len(recs)} recordings:\n" + "\n".join(summary) + "\n\nTo send a recording to the user, use send_media with the download path."
 
@@ -180,7 +180,7 @@ async def get_recording(recording_id: str, **kwargs) -> str:
     """Get full details and download URL for a specific recording."""
     try:
         result = await _api_get(f"/api/recordings/{recording_id}")
-        dl_url = result.get("cloud_url") or f"/api/recordings/{recording_id}/download"
+        dl_url = f"/api/recordings/{recording_id}/download"
         camera_info = result.get("camera_info") or {}
         camera_name = camera_info.get("name", result.get("camera_id", "unknown"))
         node = camera_info.get("node_name", result.get("node_name", "N/A"))
