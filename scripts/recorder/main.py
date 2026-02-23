@@ -161,13 +161,17 @@ async def _start_new_chunk() -> bool:
 
     if is_mjpeg:
         cmd = [
-            "ffmpeg", "-y", "-f", "mjpeg", "-i", STREAM_URL,
+            "ffmpeg", "-y",
+            "-use_wallclock_as_timestamps", "1",
+            "-f", "mjpeg", "-i", STREAM_URL,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-t", str(chunk_seconds), "-movflags", frag_movflags, "-f", "mp4", file_path,
         ]
     elif is_http:
         cmd = [
-            "ffmpeg", "-y", "-i", STREAM_URL,
+            "ffmpeg", "-y",
+            "-use_wallclock_as_timestamps", "1",
+            "-i", STREAM_URL,
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
             "-c:a", "aac", "-b:a", "64k",
             "-t", str(chunk_seconds), "-movflags", frag_movflags, "-f", "mp4", file_path,
