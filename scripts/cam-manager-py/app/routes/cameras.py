@@ -151,7 +151,7 @@ def _extract_ip_from_url(url: str) -> str:
         hostname = parsed.hostname
         if hostname:
             return hostname
-    except:
+    except Exception:
         pass
     # Fallback: try to find IP pattern in URL
     import re

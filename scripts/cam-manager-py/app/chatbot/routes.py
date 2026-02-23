@@ -20,22 +20,31 @@ from app.models.chat import ChatSession, ChatMessage, MEDIA_ROLES
 router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
 def _summarize_media_content(content: dict) -> str:
+    """Convert structured media payload into a short text summary for LLM context."""
     if not isinstance(content, dict):
         return "(media)"
+    lines: list[str] = []
     general = content.get("general_caption")
-    media = content.get("media") or []
-    parts: list[str] = []
     if general:
-        parts.append(f"Media caption: {general}")
-    if isinstance(media, list) and media:
-        parts.append(f"Media items: {len(media)}")
-        for i, item in enumerate(media[:20], start=1):
-            if not isinstance(item, dict):
-                continue
-            parts.append(f"{i}. {item.get('type','file')} @ {item.get('path')}")
-    else:
-        parts.append("Media: (no items)")
-    return "\n".join(parts)
+        lines.append(f"Media caption: {general}")
+    media = content.get("media") or []
+    if not isinstance(media, list) or not media:
+        lines.append("Media: (no items)")
+        return "\n".join(lines)
+    lines.append(f"Media items: {len(media)}")
+    for i, item in enumerate(media[:20], start=1):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        mtype = item.get("type")
+        path = item.get("path")
+        caption = item.get("caption")
+        nm_part = f"{name} " if name else ""
+        cap_part = f" | caption={caption}" if caption else ""
+        lines.append(f"{i}. {nm_part}{mtype or 'file'} @ {path}{cap_part}")
+    if len(media) > 20:
+        lines.append(f"... {len(media) - 20} more item(s)")
+    return "\n".join(lines)
 
 
 def _coerce_role_for_llm(role: str) -> str:

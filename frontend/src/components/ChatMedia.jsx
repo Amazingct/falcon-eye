@@ -9,10 +9,8 @@ function encodePathPreserveSlashes(p) {
 function resolveMediaUrl(apiUrl, path, cloudUrl, url) {
   let resolved = ''
   if (url) {
-    // Explicit URL from the media item (e.g. /api/recordings/{id}/download)
-    resolved = url.startsWith('http') ? url : url
+    resolved = url
   } else if (cloudUrl) {
-    // Cloud URL (already a full https:// URL) — still needs auth if proxied through API
     resolved = cloudUrl
   } else if (!path) {
     return ''
@@ -21,17 +19,13 @@ function resolveMediaUrl(apiUrl, path, cloudUrl, url) {
   } else if (path.startsWith('/')) {
     resolved = path
   } else {
-    // Treat as shared filesystem path
     const base = apiUrl || '/api'
     resolved = `${base}/files/read/${encodePathPreserveSlashes(path)}`
   }
-  // Append auth token for API-served URLs (not external cloud URLs)
   if (resolved && !resolved.startsWith('https://') && !resolved.startsWith('http://')) {
-    // Relative API path — needs auth
     return authUrl(resolved)
   }
   if (resolved && resolved.includes('/api/')) {
-    // Absolute API URL — needs auth
     return authUrl(resolved)
   }
   return resolved
@@ -45,14 +39,24 @@ function extLower(item) {
   return dot >= 0 ? p.slice(dot + 1).toLowerCase() : ''
 }
 
-function isImageExt(ext) {
-  return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext)
-}
-function isVideoExt(ext) {
-  return ['mp4', 'webm', 'mov', 'mkv', 'avi', '3gp'].includes(ext)
-}
-function isAudioExt(ext) {
-  return ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'].includes(ext)
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'])
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', '3gp'])
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'])
+
+function detectMediaKind(item) {
+  const ext = extLower(item)
+  if (IMAGE_EXTS.has(ext)) return 'image'
+  if (VIDEO_EXTS.has(ext)) return 'video'
+  if (AUDIO_EXTS.has(ext)) return 'audio'
+  const mt = (item?.media_type || '').toLowerCase()
+  if (mt === 'photo' || mt === 'image') return 'image'
+  if (mt === 'video') return 'video'
+  if (mt === 'audio') return 'audio'
+  const mime = (item?.mime_type || '').toLowerCase()
+  if (mime.startsWith('image/')) return 'image'
+  if (mime.startsWith('video/')) return 'video'
+  if (mime.startsWith('audio/')) return 'audio'
+  return 'file'
 }
 
 export default function ChatMedia({ content, apiUrl }) {
@@ -77,8 +81,8 @@ export default function ChatMedia({ content, apiUrl }) {
       <div className="grid grid-cols-1 gap-2">
         {items.map((item, idx) => {
           const ext = extLower(item)
-          const rawUrl = resolveMediaUrl(apiUrl, item?.path || '', item?.cloud_url, item?.url)
-          const url = authUrl(rawUrl)
+          const kind = detectMediaKind(item)
+          const url = resolveMediaUrl(apiUrl, item?.path || '', item?.cloud_url, item?.url)
           const caption = item?.caption ?? null
           const name = item?.name ?? null
           const cam = item?.cam ?? null
@@ -119,10 +123,9 @@ export default function ChatMedia({ content, apiUrl }) {
                 )}
               </div>
 
-              {/* Media body */}
               {url ? (
                 <>
-                  {isImageExt(ext) ? (
+                  {kind === 'image' ? (
                     <a href={url} target="_blank" rel="noopener noreferrer">
                       <img
                         src={url}
@@ -131,13 +134,13 @@ export default function ChatMedia({ content, apiUrl }) {
                         loading="lazy"
                       />
                     </a>
-                  ) : isVideoExt(ext) ? (
+                  ) : kind === 'video' ? (
                     <video
                       className="mt-2 w-full max-h-80 rounded-md border border-gray-700"
                       controls
                       src={url}
                     />
-                  ) : isAudioExt(ext) ? (
+                  ) : kind === 'audio' ? (
                     <audio className="mt-2 w-full" controls src={url} />
                   ) : (
                     <div className="mt-2 text-xs text-gray-300">

@@ -39,4 +39,7 @@ Last updated: 2026-02-21
 - RTSP public cameras are nearly extinct — most require auth now
 - For reliable testing, use your own cameras (USB webcam or Tuya/ONVIF IP cam)
 - Baby Cam RTSP requires ONVIF enabled in Tuya/Smart Life app
-- test with telegram bot: 8549843147:AAF9U4-CTZ1ftIWILfy3NJ-ekBRrXFmCahY
+- test with telegram bot: <your-bot-token>
+
+
+

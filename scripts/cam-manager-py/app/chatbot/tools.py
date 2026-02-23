@@ -9,8 +9,9 @@ import httpx
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-# Base URL for internal API calls (FastAPI runs on port 8000)
-API_BASE = "http://localhost:8000"
+import os as _os
+_port = _os.environ.get("PORT", "8000")
+API_BASE = f"http://localhost:{_port}"
 DEFAULT_TIMEOUT = 30
 
 # Thread pool for running sync HTTP calls

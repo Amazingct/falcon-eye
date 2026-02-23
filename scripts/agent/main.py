@@ -223,21 +223,30 @@ async def fetch_history(session_id: str) -> list[dict]:
 
 
 def _summarize_media_content(content: dict) -> str:
+    """Convert structured media payload into a short text summary for LLM context."""
     if not isinstance(content, dict):
         return "(media)"
-    general = content.get("general_caption")
-    media = content.get("media") or []
     lines: list[str] = []
+    general = content.get("general_caption")
     if general:
         lines.append(f"Media caption: {general}")
-    if isinstance(media, list) and media:
-        lines.append(f"Media items: {len(media)}")
-        for i, item in enumerate(media[:20], start=1):
-            if not isinstance(item, dict):
-                continue
-            lines.append(f"{i}. {item.get('type','file')} @ {item.get('path')}")
-    else:
+    media = content.get("media") or []
+    if not isinstance(media, list) or not media:
         lines.append("Media: (no items)")
+        return "\n".join(lines)
+    lines.append(f"Media items: {len(media)}")
+    for i, item in enumerate(media[:20], start=1):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        mtype = item.get("type")
+        path = item.get("path")
+        caption = item.get("caption")
+        nm_part = f"{name} " if name else ""
+        cap_part = f" | caption={caption}" if caption else ""
+        lines.append(f"{i}. {nm_part}{mtype or 'file'} @ {path}{cap_part}")
+    if len(media) > 20:
+        lines.append(f"... {len(media) - 20} more item(s)")
     return "\n".join(lines)
 
 
@@ -267,7 +276,7 @@ async def save_message(session_id: str, role: str, content, source: str,
                        completion_tokens: int | None = None):
     try:
         async with httpx.AsyncClient(timeout=15, headers=_api_headers()) as client:
-            await client.post(
+            res = await client.post(
                 f"{API_URL}/api/chat/{AGENT_ID}/messages/save",
                 json={
                     "session_id": session_id, "role": role,
@@ -277,6 +286,8 @@ async def save_message(session_id: str, role: str, content, source: str,
                     "completion_tokens": completion_tokens,
                 },
             )
+            if res.status_code >= 400:
+                logger.error("Failed to save message (HTTP %d): %s", res.status_code, res.text[:300])
     except Exception as e:
         logger.error(f"Failed to save message: {e}")
 
@@ -330,9 +341,9 @@ async def process_message(message_text: str, session_id: str,
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
         )
 
-        # Save media messages to DB so they persist across session loads
-        # Wrap in the structured format that ChatMedia expects: {general_caption, media: [...]}
-        if media:
+        # Save media messages to DB (skip items already persisted by deliver_media_message)
+        unsaved_media = [m for m in media if not m.get("_already_persisted")] if media else []
+        if unsaved_media:
             media_payload = {
                 "general_caption": None,
                 "media": [
@@ -346,7 +357,7 @@ async def process_message(message_text: str, session_id: str,
                         "cam": None,
                         "timestamps": None,
                     }
-                    for m in media
+                    for m in unsaved_media
                 ],
             }
             await save_message(session_id, "assistant_media", media_payload, source)

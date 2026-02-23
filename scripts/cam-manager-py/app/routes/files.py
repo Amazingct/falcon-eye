@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files", tags=["files"])
 
 FILES_ROOT = os.environ.get("AGENT_FILES_ROOT", "/agent-files")
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(500 * 1024 * 1024)))  # 500 MB
+MAX_WRITE_BYTES = int(os.environ.get("MAX_WRITE_BYTES", str(10 * 1024 * 1024)))  # 10 MB
 
 
 def _safe_path(user_path: str) -> Path:
@@ -98,6 +100,8 @@ async def read_file(file_path: str):
 @router.post("/write")
 async def write_text_file(req: WriteRequest):
     """Write text content to a file. Creates parent directories as needed."""
+    if len(req.content.encode("utf-8")) > MAX_WRITE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Content exceeds max write size ({MAX_WRITE_BYTES // (1024*1024)} MB)")
     target = _safe_path(req.path)
     target.parent.mkdir(parents=True, exist_ok=True)
     if req.append:
@@ -120,7 +124,17 @@ async def upload_file(file_path: str, file: UploadFile = File(...)):
     target.parent.mkdir(parents=True, exist_ok=True)
 
     with open(target, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+        total = 0
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                f.close()
+                target.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"Upload exceeds max size ({MAX_UPLOAD_BYTES // (1024*1024)} MB)")
+            f.write(chunk)
 
     size = target.stat().st_size
     logger.info(f"File uploaded: {file_path} ({size} bytes)")

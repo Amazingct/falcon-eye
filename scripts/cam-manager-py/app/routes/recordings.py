@@ -73,12 +73,14 @@ async def _stream_from_cloud(recording: Recording):
 
     def _iter_body():
         body = s3_response["Body"]
-        while True:
-            chunk = body.read(64 * 1024)  # 64KB chunks
-            if not chunk:
-                break
-            yield chunk
-        body.close()
+        try:
+            while True:
+                chunk = body.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
 
     headers = {"Content-Disposition": f'attachment; filename="{recording.file_name}"'}
     if content_length:

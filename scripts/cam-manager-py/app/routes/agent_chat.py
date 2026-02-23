@@ -4,9 +4,10 @@ import json
 import os
 import uuid
 import logging
-from collections import defaultdict
+from collections import OrderedDict
 from typing import Optional, Any
 from uuid import UUID
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -22,7 +23,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["agent-chat"])
 settings = get_settings()
 
-_session_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+_MAX_SESSION_LOCKS = 1000
+_session_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
+
+
+def _get_session_lock(key: str) -> asyncio.Lock:
+    """Get or create a per-session lock, evicting the oldest if over capacity."""
+    if key in _session_locks:
+        _session_locks.move_to_end(key)
+        return _session_locks[key]
+    lock = asyncio.Lock()
+    _session_locks[key] = lock
+    while len(_session_locks) > _MAX_SESSION_LOCKS:
+        _session_locks.popitem(last=False)
+    return lock
 
 def _summarize_media_content(content: dict) -> str:
     """Convert structured media payload into a short text summary for LLM context."""
@@ -140,7 +154,7 @@ async def send_message(
     session_id = data.session_id or str(uuid.uuid4())
     lock_key = f"{agent_id}:{session_id}"
 
-    async with _session_locks[lock_key]:
+    async with _get_session_lock(lock_key):
         user_msg = AgentChatMessage(
             agent_id=agent_id,
             session_id=session_id,
@@ -247,14 +261,15 @@ async def send_message(
         # Save media messages to DB and resolve URLs
         if pending_media:
             for m in pending_media:
-                # Add a URL the frontend can use
+                if m.get("_already_persisted"):
+                    continue
                 if "path" in m and "url" not in m:
                     p = m["path"]
                     if p.startswith("/api/") or p.startswith("http"):
                         m["url"] = p
                     else:
-                        m["url"] = f"/api/files/{p}"
-                # Wrap in {media: [...]} format expected by ChatMedia component
+                        encoded = "/".join(quote(seg, safe="") for seg in p.split("/"))
+                        m["url"] = f"/api/files/{encoded}"
                 media_content = {"media": [m]}
                 media_msg = AgentChatMessage(
                     agent_id=agent_id,
@@ -269,9 +284,6 @@ async def send_message(
                 db.add(media_msg)
 
         await db.commit()
-
-    if not _session_locks[lock_key].locked():
-        _session_locks.pop(lock_key, None)
 
     resp = {
         "response": response_text,

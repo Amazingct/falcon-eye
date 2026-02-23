@@ -2411,7 +2411,7 @@ function ChatWidget({ isOpen, onToggle, isDocked, onDockToggle, panelWidth, onWi
     authFetch(`${API_URL}/agents/`).then(r => r.json()).then(data => {
       const main = (data.agents || []).find(a => a.slug === 'main')
       if (main) setMainAgentId(main.id)
-    }).catch(() => {})
+    }).catch(e => console.error('Failed to fetch agents:', e))
   }, [])
 
   // Handle resize drag

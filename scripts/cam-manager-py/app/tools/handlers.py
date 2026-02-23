@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import uuid as _uuid
+from urllib.parse import quote
 import httpx
 from app.config import get_settings
 
@@ -28,12 +29,16 @@ EPHEMERAL_EXCLUDED_TOOLS = {
 async def _api_get(path: str) -> dict:
     async with httpx.AsyncClient(timeout=30, headers=_INTERNAL_HEADERS) as client:
         res = await client.get(f"{API_BASE}{path}")
+        if res.status_code >= 400:
+            raise Exception(f"API GET {path} returned {res.status_code}: {res.text[:300]}")
         return res.json()
 
 
 async def _api_post(path: str, data: dict = None) -> dict:
     async with httpx.AsyncClient(timeout=30, headers=_INTERNAL_HEADERS) as client:
         res = await client.post(f"{API_BASE}{path}", json=data)
+        if res.status_code >= 400:
+            raise Exception(f"API POST {path} returned {res.status_code}: {res.text[:300]}")
         return res.json()
 
 
@@ -965,13 +970,13 @@ async def send_media(path: str, caption: str = "", media_type: str = "auto", **k
             else:
                 media_type = "document"
 
-        # Build the URL for the frontend
         if is_full_url:
             url = path
         elif is_api_path:
-            url = path  # Already a valid API path
+            url = path
         else:
-            url = f"/api/files/{path}"
+            encoded = "/".join(quote(seg, safe="") for seg in path.split("/"))
+            url = f"/api/files/{encoded}"
 
         media_entry = {
             "path": path,
@@ -1042,8 +1047,10 @@ async def deliver_media_message(
     except Exception as e:
         return f"Error: failed to persist media message ({e})"
 
-    # 2) Queue each item for channel delivery (Telegram, etc.) via legacy media side-channel
+    # 2) Queue each item for channel delivery (Telegram, etc.)
+    #    Mark as _already_persisted so callers don't save them again.
     queued = 0
+    pending = ctx.get("pending_media")
     for item in (media or []):
         if not isinstance(item, dict):
             continue
@@ -1052,12 +1059,24 @@ async def deliver_media_message(
             continue
         caption = item.get("caption") or general_caption or ""
         media_type = _media_type_from_item(item)
-        try:
-            await send_media(path=path, caption=caption, media_type=media_type, **kwargs)
+        is_api_path = path.startswith("/api/")
+        is_full_url = path.startswith("http://") or path.startswith("https://")
+        if is_full_url:
+            url = path
+        elif is_api_path:
+            url = path
+        else:
+            encoded = "/".join(quote(seg, safe="") for seg in path.split("/"))
+            url = f"/api/files/{encoded}"
+        if pending is not None:
+            pending.append({
+                "path": path,
+                "url": url,
+                "caption": caption,
+                "media_type": media_type,
+                "_already_persisted": True,
+            })
             queued += 1
-        except Exception:
-            # Best-effort; persistence already happened
-            pass
 
     return f"Delivered {len(media or [])} media item(s) to session {resolved_session}. Queued {queued} attachment(s)."
 

@@ -213,7 +213,7 @@ async def stream_chat(
             if isinstance(tc["args"], str):
                 try:
                     tc["args"] = json_module.loads(tc["args"]) if tc["args"] else {}
-                except:
+                except Exception:
                     tc["args"] = {}
         
         ai_msg = AIMessage(content=ai_message_content, tool_calls=ai_tool_calls)

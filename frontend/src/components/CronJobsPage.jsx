@@ -33,11 +33,11 @@ export default function CronJobsPage() {
         const data = await res.json()
         setAgents(data.agents || [])
       }
-    } catch (err) {}
+    } catch (err) { console.error('Failed to fetch agents:', err) }
   }
 
   useEffect(() => {
-    Promise.all([fetchCronJobs(), fetchAgents()])
+    Promise.all([fetchCronJobs(), fetchAgents()]).catch(e => console.error('Failed initial cron load:', e))
     const interval = setInterval(fetchCronJobs, 10000)
     return () => clearInterval(interval)
   }, [])

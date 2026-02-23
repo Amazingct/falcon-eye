@@ -33,7 +33,7 @@ export default function AgentChat({ agentId: propAgentId, compact = false }) {
       const agentList = d.agents || []
       setAgents(agentList)
       if (agentList.length > 0 && !selectedAgent) setSelectedAgent(agentList[0])
-    }).catch(() => {})
+    }).catch(e => console.error('Failed to fetch agents:', e))
   }, [propAgentId])
 
   // Fetch sessions when agent changes
@@ -43,7 +43,7 @@ export default function AgentChat({ agentId: propAgentId, compact = false }) {
       const list = d.sessions || []
       setSessions(list)
       if (list.length > 0 && !selectedSession) setSelectedSession(list[0].session_id)
-    }).catch(() => {})
+    }).catch(e => console.error('Failed to fetch sessions:', e))
   }, [selectedAgent])
 
   // Load messages when session changes
@@ -53,7 +53,7 @@ export default function AgentChat({ agentId: propAgentId, compact = false }) {
     authFetch(`${API_URL}/chat/${selectedAgent.id}/history?session_id=${selectedSession}&limit=100`)
       .then(r => r.json())
       .then(d => setMessages(d.messages || []))
-      .catch(() => {})
+      .catch(e => console.error('Failed to load messages:', e))
       .finally(() => setLoading(false))
   }, [selectedAgent, selectedSession])
 
@@ -71,7 +71,7 @@ export default function AgentChat({ agentId: propAgentId, compact = false }) {
         setMessages([])
         setSessions(prev => [{ session_id: data.session_id, message_count: 0, started_at: new Date().toISOString() }, ...prev])
       }
-    } catch (e) {}
+    } catch (e) { console.error('Failed to create session:', e) }
   }
 
   const sendMessage = async () => {
@@ -103,13 +103,19 @@ export default function AgentChat({ agentId: propAgentId, compact = false }) {
       })
       if (res.ok) {
         const data = await res.json()
-        // Refresh history so tool-emitted media messages appear immediately
         try {
           const histRes = await authFetch(`${API_URL}/chat/${selectedAgent.id}/history?session_id=${sessionId}&limit=200`)
           const hist = await histRes.json()
           setMessages(hist.messages || [])
         } catch (e) {
-          setMessages(prev => [...prev, { role: 'assistant', content: data.response, source: 'dashboard', created_at: data.timestamp }])
+          console.error('Failed to refresh chat history:', e)
+          const newMsgs = [{ role: 'assistant', content: data.response, source: 'dashboard', created_at: data.timestamp }]
+          if (Array.isArray(data.media)) {
+            for (const m of data.media) {
+              newMsgs.push({ role: 'assistant_media', content: m, source: 'dashboard', created_at: data.timestamp })
+            }
+          }
+          setMessages(prev => [...prev, ...newMsgs])
         }
       } else {
         const errData = await res.json().catch(() => null)
@@ -242,7 +248,7 @@ export default function AgentChat({ agentId: propAgentId, compact = false }) {
               type="text"
               value={input}
               onChange={e => setInput(e.target.value)}
-              onKeyPress={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }}
               placeholder={selectedAgent ? 'Type a message...' : 'Select an agent first'}
               disabled={!selectedAgent || sendingMsg}
               className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"

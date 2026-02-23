@@ -154,7 +154,7 @@ async def _scan_network_cameras(subnet: str) -> tuple[list[NetworkCamera], list[
                         url=f"rtsp://{ip}:554/Streaming/Channels/101",
                         node_name="LAN"
                     )
-        except:
+        except Exception:
             pass
         return None
     

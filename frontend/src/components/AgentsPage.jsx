@@ -216,7 +216,7 @@ function AgentModal({ agent, onClose, onSave }) {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    authFetch(`${API_URL}/tools/`).then(r => r.json()).then(d => setAllTools(d.tools || {})).catch(() => {})
+    authFetch(`${API_URL}/tools/`).then(r => r.json()).then(d => setAllTools(d.tools || {})).catch(e => console.error('Failed to fetch tools:', e))
   }, [])
 
   const autoSlug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50)

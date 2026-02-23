@@ -63,7 +63,7 @@ export default function AgentDetailPage({ agentId, onBack }) {
     authFetch(`${API_URL}/agents/${agentId}`)
       .then(r => r.json())
       .then(setAgent)
-      .catch(() => {})
+      .catch(e => console.error('Failed to fetch agent:', e))
       .finally(() => setLoading(false))
   }, [agentId])
 
