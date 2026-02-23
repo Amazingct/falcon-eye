@@ -1,10 +1,24 @@
-"""Queue management API — Celery task inspection and control."""
+"""Queue management API — Celery task inspection and control.
+
+All endpoints use plain ``def`` (not ``async def``) so FastAPI runs them in
+a thread-pool.  The Celery inspect / Redis calls are synchronous and would
+block the entire async event loop if executed on the main thread.
+"""
+import json
 import logging
+
+import redis as redis_lib
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import create_engine, text
+
+from app.config import get_settings
 from app.worker import celery_app
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
 logger = logging.getLogger(__name__)
+
+_INSPECT_TIMEOUT = 2
+_MAX_RESULT_KEYS = 500
 
 
 def _redis_ok() -> bool:
@@ -16,11 +30,40 @@ def _redis_ok() -> bool:
 
 
 def _inspect():
-    return celery_app.control.inspect(timeout=3)
+    return celery_app.control.inspect(timeout=_INSPECT_TIMEOUT)
+
+
+def _enrich_tasks(tasks: list[dict]) -> list[dict]:
+    """Add camera_name and file_name to tasks by looking up recording IDs."""
+    rec_ids = list({t["recording_id"] for t in tasks if t.get("recording_id")})
+    if not rec_ids:
+        return tasks
+
+    rec_map = {}
+    try:
+        settings = get_settings()
+        engine = create_engine(settings.sync_database_url)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT id, camera_name, file_name FROM recordings WHERE id = ANY(:ids)"),
+                {"ids": rec_ids},
+            )
+            for row in rows:
+                rec_map[row[0]] = {"camera_name": row[1], "file_name": row[2]}
+        engine.dispose()
+    except Exception as e:
+        logger.warning("Failed to enrich tasks with recording info: %s", e)
+
+    for t in tasks:
+        info = rec_map.get(t.get("recording_id"), {})
+        t["camera_name"] = info.get("camera_name")
+        t["file_name"] = info.get("file_name")
+
+    return tasks
 
 
 @router.get("/status")
-async def queue_status():
+def queue_status():
     redis_connected = _redis_ok()
     workers = []
     stats = {"completed": 0, "failed": 0}
@@ -57,7 +100,7 @@ def _extract_task(t, status):
 
 
 @router.get("/tasks")
-async def queue_tasks():
+def queue_tasks():
     active, reserved, completed, failed = [], [], [], []
     try:
         i = _inspect()
@@ -70,12 +113,14 @@ async def queue_tasks():
     except Exception as e:
         logger.warning("Task inspect failed: %s", e)
 
-    # Check recent results from the result backend
+    # Check recent results from the result backend (capped to avoid slow scans)
     try:
-        import redis as redis_lib
-        import json
         r = redis_lib.Redis.from_url(celery_app.conf.result_backend, decode_responses=True)
+        scanned = 0
         for key in r.scan_iter("celery-task-meta-*", count=200):
+            scanned += 1
+            if scanned > _MAX_RESULT_KEYS:
+                break
             try:
                 raw = r.get(key)
                 if not raw:
@@ -91,7 +136,6 @@ async def queue_tasks():
                     "completed_at": meta.get("date_done"),
                     "error": None,
                 }
-                # Try to get args from the meta
                 args = meta.get("args")
                 if args and isinstance(args, list) and args:
                     task_info["recording_id"] = args[0]
@@ -112,20 +156,26 @@ async def queue_tasks():
     except Exception as e:
         logger.warning("Result backend scan failed: %s", e)
 
+    all_tasks = active + reserved + completed[-50:] + failed[-50:]
+    _enrich_tasks(all_tasks)
+
+    enriched_active = [t for t in all_tasks if t["status"] == "active"]
+    enriched_reserved = [t for t in all_tasks if t["status"] == "reserved"]
+    enriched_completed = [t for t in all_tasks if t["status"] == "completed"]
+    enriched_failed = [t for t in all_tasks if t["status"] == "failed"]
+
     return {
-        "active": active,
-        "reserved": reserved,
-        "completed": completed[-50:],
-        "failed": failed[-50:],
+        "active": enriched_active,
+        "reserved": enriched_reserved,
+        "completed": enriched_completed,
+        "failed": enriched_failed,
     }
 
 
 @router.post("/retry/{task_id}")
-async def retry_task(task_id: str):
+def retry_task(task_id: str):
     """Re-send a failed task. Looks up original task name/args from result backend."""
     try:
-        import redis as redis_lib
-        import json
         r = redis_lib.Redis.from_url(celery_app.conf.result_backend, decode_responses=True)
         raw = r.get(f"celery-task-meta-{task_id}")
         if not raw:
@@ -135,7 +185,6 @@ async def retry_task(task_id: str):
         args = meta.get("args", [])
         kwargs = meta.get("kwargs", {})
         if not task_name:
-            # Try to infer from children or just re-send upload
             raise HTTPException(400, "Cannot determine original task name")
         celery_app.send_task(task_name, args=args, kwargs=kwargs)
         return {"ok": True, "message": f"Retried {task_name}"}
@@ -146,7 +195,7 @@ async def retry_task(task_id: str):
 
 
 @router.post("/purge")
-async def purge_queue():
+def purge_queue():
     """Purge all pending (reserved) tasks."""
     try:
         purged = celery_app.control.purge()

@@ -2131,7 +2131,6 @@ function SettingsPage({ nodes, onBack, onClearAll }) {
 function QueueSection() {
   const [status, setStatus] = useState(null)
   const [tasks, setTasks] = useState(null)
-  const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [purging, setPurging] = useState(false)
   const [confirmPurge, setConfirmPurge] = useState(false)
@@ -2170,10 +2169,6 @@ function QueueSection() {
     fetchData()
   }
 
-  const TASK_NAMES = {
-    upload_recording_to_cloud: 'Upload Recording',
-    delete_local_recording: 'Delete Local File',
-  }
   const STATUS_BADGE = {
     active: { icon: '🔄', cls: 'bg-blue-500/20 text-blue-400' },
     reserved: { icon: '⏳', cls: 'bg-yellow-500/20 text-yellow-400' },
@@ -2188,8 +2183,63 @@ function QueueSection() {
     ...(tasks.failed || []).map(t => ({ ...t, status: 'failed' })),
   ] : []
 
-  const filtered = filter === 'all' ? allTasks : allTasks.filter(t => t.status === filter)
-  const filters = ['all', 'active', 'reserved', 'completed', 'failed']
+  const uploadTasks = allTasks.filter(t => t.task_name !== 'delete_local_recording')
+  const deleteTasks = allTasks.filter(t => t.task_name === 'delete_local_recording')
+
+  const renderTaskRows = (taskList, emptyLabel) => {
+    if (taskList.length === 0) {
+      return <p className="text-sm text-gray-500 text-center py-6">No {emptyLabel} tasks</p>
+    }
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left">
+          <thead>
+            <tr className="text-xs text-gray-400 uppercase border-b border-gray-700">
+              <th className="px-4 py-2">Status</th>
+              <th className="px-4 py-2">Camera</th>
+              <th className="px-4 py-2">File</th>
+              <th className="px-4 py-2">Time</th>
+              <th className="px-4 py-2">Error</th>
+              <th className="px-4 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {taskList.map((task, i) => {
+              const badge = STATUS_BADGE[task.status] || STATUS_BADGE.active
+              return (
+                <tr key={task.task_id || i} className="border-b border-gray-700/50 hover:bg-gray-700/30">
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full whitespace-nowrap ${badge.cls}`}>
+                      {badge.icon} {task.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-300">
+                    {task.camera_name || '—'}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-300 max-w-[200px] truncate" title={task.file_name || ''}>
+                    {task.file_name || (task.recording_id ? `${task.recording_id.slice(0, 12)}…` : '—')}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">
+                    {task.started_at ? new Date(task.started_at).toLocaleString() : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-red-400 max-w-xs truncate">
+                    {task.error || ''}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {task.status === 'failed' && (
+                      <button onClick={() => retryTask(task.task_id)} className="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded transition">
+                        Retry
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
 
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-gray-400" /></div>
 
@@ -2235,70 +2285,39 @@ function QueueSection() {
         )}
       </div>
 
-      {/* Task Queue */}
+      {/* Purge Controls */}
+      <div className="flex justify-end">
+        {confirmPurge ? (
+          <div className="flex items-center space-x-2">
+            <span className="text-xs text-yellow-400">Purge all pending?</span>
+            <button onClick={purgeQueue} disabled={purging} className="text-xs bg-red-600 hover:bg-red-700 px-3 py-1 rounded transition">
+              {purging ? 'Purging…' : 'Confirm'}
+            </button>
+            <button onClick={() => setConfirmPurge(false)} className="text-xs bg-gray-600 hover:bg-gray-500 px-3 py-1 rounded transition">Cancel</button>
+          </div>
+        ) : (
+          <button onClick={() => setConfirmPurge(true)} className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded transition text-gray-300">
+            Purge Queue
+          </button>
+        )}
+      </div>
+
+      {/* Upload Tasks Table */}
       <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Tasks</h3>
-          {confirmPurge ? (
-            <div className="flex items-center space-x-2">
-              <span className="text-xs text-yellow-400">Purge all pending?</span>
-              <button onClick={purgeQueue} disabled={purging} className="text-xs bg-red-600 hover:bg-red-700 px-3 py-1 rounded transition">
-                {purging ? 'Purging…' : 'Confirm'}
-              </button>
-              <button onClick={() => setConfirmPurge(false)} className="text-xs bg-gray-600 hover:bg-gray-500 px-3 py-1 rounded transition">Cancel</button>
-            </div>
-          ) : (
-            <button onClick={() => setConfirmPurge(true)} className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded transition text-gray-300">
-              Purge Queue
-            </button>
-          )}
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Cloud Uploads</h3>
+          <span className="text-xs text-gray-500">{uploadTasks.length} task{uploadTasks.length !== 1 ? 's' : ''}</span>
         </div>
+        {renderTaskRows(uploadTasks, 'upload')}
+      </div>
 
-        {/* Filters */}
-        <div className="flex space-x-1">
-          {filters.map(f => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`text-xs px-3 py-1.5 rounded-lg transition capitalize ${filter === f ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
-            >
-              {f}
-            </button>
-          ))}
+      {/* Delete Tasks Table */}
+      <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Local Deletions</h3>
+          <span className="text-xs text-gray-500">{deleteTasks.length} task{deleteTasks.length !== 1 ? 's' : ''}</span>
         </div>
-
-        {/* Task List */}
-        {filtered.length === 0 ? (
-          <p className="text-sm text-gray-500 text-center py-8">No {filter === 'all' ? '' : filter} tasks</p>
-        ) : (
-          <div className="space-y-2">
-            {filtered.map((task, i) => {
-              const badge = STATUS_BADGE[task.status] || STATUS_BADGE.active
-              return (
-                <div key={task.task_id || i} className="flex items-center justify-between bg-gray-700/50 rounded-lg px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center space-x-2">
-                      <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full ${badge.cls}`}>
-                        {badge.icon} {task.status}
-                      </span>
-                      <span className="text-sm font-medium truncate">{TASK_NAMES[task.task_name] || task.task_name}</span>
-                    </div>
-                    <div className="flex items-center space-x-3 mt-1 text-xs text-gray-500">
-                      {task.recording_id && <span className="font-mono">{task.recording_id.slice(0, 8)}…</span>}
-                      {task.started_at && <span>{new Date(task.started_at).toLocaleString()}</span>}
-                    </div>
-                    {task.error && <p className="text-xs text-red-400 mt-1 truncate">{task.error}</p>}
-                  </div>
-                  {task.status === 'failed' && (
-                    <button onClick={() => retryTask(task.task_id)} className="ml-3 text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded transition flex-shrink-0">
-                      Retry
-                    </button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
+        {renderTaskRows(deleteTasks, 'deletion')}
       </div>
     </div>
   )
