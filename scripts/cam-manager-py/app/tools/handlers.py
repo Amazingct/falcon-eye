@@ -908,6 +908,9 @@ async def send_media(path: str, caption: str = "", media_type: str = "auto", **k
                 media_type = "photo"
             elif ext in VIDEO_EXTENSIONS:
                 media_type = "video"
+            elif "/api/recordings/" in path and "/download" in path:
+                # Recording download URLs have no extension but are always video
+                media_type = "video"
             else:
                 media_type = "document"
 
@@ -949,6 +952,9 @@ def _media_type_from_item(item: dict) -> str:
         if dot_ext in PHOTO_EXTENSIONS:
             return "photo"
         if dot_ext in VIDEO_EXTENSIONS:
+            return "video"
+        # Recording download URLs have no extension
+        if "/api/recordings/" in path and "/download" in path:
             return "video"
     except Exception:
         pass
