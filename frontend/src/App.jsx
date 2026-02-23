@@ -8,33 +8,15 @@ import CronExpressionBuilder from './components/CronExpressionBuilder'
 // ChatMarkdown and ChatMedia now used only within AgentChat component
 import { SetupPage, LoginPage } from './components/AuthPages'
 
+import {
+  getAuthToken, setAuthToken, setOnAuthFailure,
+  authFetch, authUrl,
+} from './utils/auth'
+
+// Re-export for backward compatibility (other components import from App)
+export { getAuthToken, authFetch, authUrl }
+
 const API_URL = import.meta.env.VITE_API_URL || window.API_URL || '/api'
-
-// Auth token management
-let _authToken = localStorage.getItem('falcon_eye_token')
-let _onAuthFailure = null
-
-export function getAuthToken() { return _authToken }
-
-export function authFetch(url, options = {}) {
-  const headers = { ...(options.headers || {}) }
-  if (_authToken) {
-    headers['Authorization'] = `Bearer ${_authToken}`
-  }
-  return fetch(url, { ...options, headers }).then(res => {
-    if (res.status === 401 && _onAuthFailure) {
-      _onAuthFailure()
-    }
-    return res
-  })
-}
-
-// Append token to URL for <img src> tags
-export function authUrl(url) {
-  if (!_authToken || !url) return url
-  const sep = url.includes('?') ? '&' : '?'
-  return `${url}${sep}token=${encodeURIComponent(_authToken)}`
-}
 
 function App() {
   const [authState, setAuthState] = useState('loading') // loading, login, authenticated
@@ -42,26 +24,27 @@ function App() {
   const [isDefaultCreds, setIsDefaultCreds] = useState(false)
 
   const handleAuth = (token, username) => {
-    _authToken = token
+    setAuthToken(token)
     localStorage.setItem('falcon_eye_token', token)
     setAuthUser(username)
     setAuthState('authenticated')
   }
 
   const handleLogout = () => {
-    _authToken = null
+    setAuthToken(null)
     localStorage.removeItem('falcon_eye_token')
     setAuthUser(null)
     setAuthState('login')
   }
 
-  _onAuthFailure = handleLogout
+  setOnAuthFailure(handleLogout)
 
   // Check auth status on mount
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const headers = _authToken ? { 'Authorization': `Bearer ${_authToken}` } : {}
+        const token = getAuthToken()
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {}
         const res = await fetch(`${API_URL}/auth/status`, { headers })
         const data = await res.json()
         if (data.authenticated) {
@@ -73,7 +56,7 @@ function App() {
           setAuthState('login')
         } else {
           localStorage.removeItem('falcon_eye_token')
-          _authToken = null
+          setAuthToken(null)
           setAuthState('login')
         }
       } catch {
@@ -2361,7 +2344,7 @@ function SecuritySection() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || 'Failed to update')
       // Update token
-      _authToken = data.token
+      setAuthToken(data.token)
       localStorage.setItem('falcon_eye_token', data.token)
       setMessage('Credentials updated successfully')
       setCurrentPassword('')

@@ -1,7 +1,6 @@
 import React from 'react'
-import { authUrl } from '../App'
 import { Download, Camera, Clock } from 'lucide-react'
-import { authUrl } from '../App'
+import { authUrl } from '../utils/auth'
 
 function encodePathPreserveSlashes(p) {
   return p.split('/').map(encodeURIComponent).join('/')
