@@ -294,8 +294,7 @@ async def cleanup_uploaded_local_files():
                 SELECT id, camera_id::text, file_path, file_name, node_name
                 FROM recordings
                 WHERE cloud_url IS NOT NULL
-                  AND file_path IS NOT NULL
-                  AND file_path != ''
+                  AND file_path IS NOT NULL AND file_path != ''
                   AND status = 'UPLOADED'
             """)
         )
@@ -335,7 +334,7 @@ async def cleanup_uploaded_local_files():
                     logger.info(f"Deleted local file: {file_path}")
                     deleted_count += 1
                     await session.execute(
-                        text("UPDATE recordings SET file_path = NULL WHERE id = :id"),
+                        text("UPDATE recordings SET file_path = '' WHERE id = :id"),
                         {"id": rec_id},
                     )
                     continue
@@ -373,7 +372,7 @@ async def cleanup_uploaded_local_files():
             # Even if remote delete didn't work, clear file_path in DB
             # so the download route uses cloud_url instead
             await session.execute(
-                text("UPDATE recordings SET file_path = NULL WHERE id = :id"),
+                text("UPDATE recordings SET file_path = '' WHERE id = :id"),
                 {"id": rec_id},
             )
             deleted_count += 1

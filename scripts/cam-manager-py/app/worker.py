@@ -149,7 +149,7 @@ def upload_recording_to_cloud(self, recording_id: str):
         with engine.connect() as conn:
             if local_deleted:
                 conn.execute(
-                    text("UPDATE recordings SET cloud_url = :url, status = 'UPLOADED', file_path = NULL WHERE id = :id"),
+                    text("UPDATE recordings SET cloud_url = :url, status = 'UPLOADED', file_path = '' WHERE id = :id"),
                     {"url": cloud_url, "id": recording_id},
                 )
             else:
