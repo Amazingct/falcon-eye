@@ -571,10 +571,23 @@ select_node() {
 
 # Prompt for optional configuration
 configure_options() {
-    # Preserve existing API keys from ConfigMap on upgrade
+    # Preserve ALL existing ConfigMap values on upgrade
     if kubectl get configmap falcon-eye-config -n ${NAMESPACE} &>/dev/null; then
         EXISTING_ANTHROPIC_KEY=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.ANTHROPIC_API_KEY}' 2>/dev/null || echo "")
         EXISTING_OPENAI_KEY=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.OPENAI_API_KEY}' 2>/dev/null || echo "")
+        EXISTING_INTERNAL_KEY=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.INTERNAL_API_KEY}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_ENABLED=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_STORAGE_ENABLED}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_PROVIDER=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_STORAGE_PROVIDER}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_ACCESS_KEY=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_STORAGE_ACCESS_KEY}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_SECRET_KEY=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_STORAGE_SECRET_KEY}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_BUCKET=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_STORAGE_BUCKET}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_REGION=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_STORAGE_REGION}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_ENDPOINT=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_STORAGE_ENDPOINT}' 2>/dev/null || echo "")
+        EXISTING_CLOUD_DELETE_LOCAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLOUD_DELETE_LOCAL}' 2>/dev/null || echo "")
+        EXISTING_LLM_PROVIDER=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.LLM_PROVIDER}' 2>/dev/null || echo "")
+        EXISTING_LLM_MODEL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.LLM_MODEL}' 2>/dev/null || echo "")
+        EXISTING_RECORDING_CHUNK=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.RECORDING_CHUNK_MINUTES}' 2>/dev/null || echo "")
+        EXISTING_CLEANUP_INTERVAL=$(kubectl get configmap falcon-eye-config -n ${NAMESPACE} -o jsonpath='{.data.CLEANUP_INTERVAL}' 2>/dev/null || echo "")
     fi
 
     # Non-interactive or upgrade: keep existing config, skip prompts
@@ -586,9 +599,24 @@ configure_options() {
         RECORDER_NODE=""
         ANTHROPIC_API_KEY="${EXISTING_ANTHROPIC_KEY:-}"
         OPENAI_API_KEY="${EXISTING_OPENAI_KEY:-}"
+        INTERNAL_KEY="${EXISTING_INTERNAL_KEY:-${INTERNAL_KEY:-}}"
+        CLOUD_STORAGE_ENABLED="${EXISTING_CLOUD_ENABLED:-false}"
+        CLOUD_STORAGE_PROVIDER="${EXISTING_CLOUD_PROVIDER:-spaces}"
+        CLOUD_STORAGE_ACCESS_KEY="${EXISTING_CLOUD_ACCESS_KEY:-}"
+        CLOUD_STORAGE_SECRET_KEY="${EXISTING_CLOUD_SECRET_KEY:-}"
+        CLOUD_STORAGE_BUCKET="${EXISTING_CLOUD_BUCKET:-}"
+        CLOUD_STORAGE_REGION="${EXISTING_CLOUD_REGION:-}"
+        CLOUD_STORAGE_ENDPOINT="${EXISTING_CLOUD_ENDPOINT:-}"
+        CLOUD_DELETE_LOCAL="${EXISTING_CLOUD_DELETE_LOCAL:-true}"
+        LLM_PROVIDER="${EXISTING_LLM_PROVIDER:-openai}"
+        LLM_MODEL="${EXISTING_LLM_MODEL:-gpt-4.1}"
+        RECORDING_CHUNK_MINUTES="${EXISTING_RECORDING_CHUNK:-15}"
+        CLEANUP_INTERVAL="${EXISTING_CLEANUP_INTERVAL:-*/2 * * * *}"
         echo -e "${GREEN}  Auto-configured: Kubernetes scheduler will place all components${NC}"
-        [ -n "$ANTHROPIC_API_KEY" ] && echo -e "${GREEN}  ✓ Anthropic API key preserved from existing config${NC}" || true
-        [ -n "$OPENAI_API_KEY" ] && echo -e "${GREEN}  ✓ OpenAI API key preserved from existing config${NC}" || true
+        [ -n "$ANTHROPIC_API_KEY" ] && echo -e "${GREEN}  ✓ Anthropic API key preserved${NC}" || true
+        [ -n "$OPENAI_API_KEY" ] && echo -e "${GREEN}  ✓ OpenAI API key preserved${NC}" || true
+        [ "$CLOUD_STORAGE_ENABLED" = "true" ] && echo -e "${GREEN}  ✓ Cloud storage config preserved (${CLOUD_STORAGE_BUCKET})${NC}" || true
+        [ -n "$INTERNAL_KEY" ] && echo -e "${GREEN}  ✓ Internal API key preserved${NC}" || true
         return
     fi
     
@@ -967,9 +995,9 @@ data:
   DATABASE_URL: "postgresql://falcon:falcon-eye-2026@postgres:5432/falconeye"
   REDIS_URL: "redis://redis:6379/0"
   NODE_ENV: "production"
-  CLEANUP_INTERVAL: "*/2 * * * *"
+  CLEANUP_INTERVAL: "${CLEANUP_INTERVAL:-*/2 * * * *}"
   CREATING_TIMEOUT_MINUTES: "15"
-  RECORDING_CHUNK_MINUTES: "15"
+  RECORDING_CHUNK_MINUTES: "${RECORDING_CHUNK_MINUTES:-15}"
   DEFAULT_RESOLUTION: "640x480"
   DEFAULT_FRAMERATE: "15"
   LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
@@ -979,14 +1007,14 @@ data:
   INTERNAL_API_KEY: "${INTERNAL_KEY:-}"
   DEFAULT_CAMERA_NODE: "${CAMERA_NODE:-}"
   DEFAULT_RECORDER_NODE: "${RECORDER_NODE:-}"
-  CLOUD_STORAGE_ENABLED: "false"
-  CLOUD_STORAGE_PROVIDER: "spaces"
-  CLOUD_STORAGE_ACCESS_KEY: ""
-  CLOUD_STORAGE_SECRET_KEY: ""
-  CLOUD_STORAGE_BUCKET: ""
-  CLOUD_STORAGE_REGION: ""
-  CLOUD_STORAGE_ENDPOINT: ""
-  CLOUD_DELETE_LOCAL: "true"
+  CLOUD_STORAGE_ENABLED: "${CLOUD_STORAGE_ENABLED:-false}"
+  CLOUD_STORAGE_PROVIDER: "${CLOUD_STORAGE_PROVIDER:-spaces}"
+  CLOUD_STORAGE_ACCESS_KEY: "${CLOUD_STORAGE_ACCESS_KEY:-}"
+  CLOUD_STORAGE_SECRET_KEY: "${CLOUD_STORAGE_SECRET_KEY:-}"
+  CLOUD_STORAGE_BUCKET: "${CLOUD_STORAGE_BUCKET:-}"
+  CLOUD_STORAGE_REGION: "${CLOUD_STORAGE_REGION:-}"
+  CLOUD_STORAGE_ENDPOINT: "${CLOUD_STORAGE_ENDPOINT:-}"
+  CLOUD_DELETE_LOCAL: "${CLOUD_DELETE_LOCAL:-true}"
 ---
 apiVersion: apps/v1
 kind: Deployment
