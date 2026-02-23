@@ -1,21 +1,18 @@
-# Build stage
-FROM node:20-alpine as builder
+# Build stage — always runs on the native build host (no qemu emulation).
+# The output is static HTML/JS/CSS, so it's platform-independent.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy package files
 COPY package*.json ./
 
-# Install dependencies
 RUN npm install
 
-# Copy source
 COPY . .
 
-# Build
 RUN npm run build
 
-# Production stage
+# Production stage — multi-arch nginx image
 FROM nginx:alpine
 
 # Copy built assets
