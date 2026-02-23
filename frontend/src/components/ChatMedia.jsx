@@ -1,4 +1,5 @@
 import React from 'react'
+import { authUrl } from '../App'
 import { Download, Camera, Clock } from 'lucide-react'
 import { authUrl } from '../App'
 
@@ -6,15 +7,35 @@ function encodePathPreserveSlashes(p) {
   return p.split('/').map(encodeURIComponent).join('/')
 }
 
-function resolveMediaUrl(apiUrl, path, cloudUrl) {
-  // Prefer cloud URL when available (already a full https:// URL)
-  if (cloudUrl) return cloudUrl
-  if (!path) return ''
-  if (path.startsWith('http://') || path.startsWith('https://')) return path
-  if (path.startsWith('/')) return path
-  // Treat as shared filesystem path
-  const base = apiUrl || '/api'
-  return `${base}/files/read/${encodePathPreserveSlashes(path)}`
+function resolveMediaUrl(apiUrl, path, cloudUrl, url) {
+  let resolved = ''
+  if (url) {
+    // Explicit URL from the media item (e.g. /api/recordings/{id}/download)
+    resolved = url.startsWith('http') ? url : url
+  } else if (cloudUrl) {
+    // Cloud URL (already a full https:// URL) — still needs auth if proxied through API
+    resolved = cloudUrl
+  } else if (!path) {
+    return ''
+  } else if (path.startsWith('http://') || path.startsWith('https://')) {
+    resolved = path
+  } else if (path.startsWith('/')) {
+    resolved = path
+  } else {
+    // Treat as shared filesystem path
+    const base = apiUrl || '/api'
+    resolved = `${base}/files/read/${encodePathPreserveSlashes(path)}`
+  }
+  // Append auth token for API-served URLs (not external cloud URLs)
+  if (resolved && !resolved.startsWith('https://') && !resolved.startsWith('http://')) {
+    // Relative API path — needs auth
+    return authUrl(resolved)
+  }
+  if (resolved && resolved.includes('/api/')) {
+    // Absolute API URL — needs auth
+    return authUrl(resolved)
+  }
+  return resolved
 }
 
 function extLower(item) {
@@ -57,7 +78,7 @@ export default function ChatMedia({ content, apiUrl }) {
       <div className="grid grid-cols-1 gap-2">
         {items.map((item, idx) => {
           const ext = extLower(item)
-          const rawUrl = resolveMediaUrl(apiUrl, item?.path || '', item?.cloud_url)
+          const rawUrl = resolveMediaUrl(apiUrl, item?.path || '', item?.cloud_url, item?.url)
           const url = authUrl(rawUrl)
           const caption = item?.caption ?? null
           const name = item?.name ?? null
