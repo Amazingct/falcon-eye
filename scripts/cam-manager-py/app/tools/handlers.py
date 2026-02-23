@@ -82,8 +82,8 @@ async def control_camera(camera_id: str, action: str, **kwargs) -> str:
         return f"Error controlling camera: {e}"
 
 
-async def camera_snapshot(camera_id_raw: str, **kwargs) -> str:
-    camera_id = await _resolve_camera_id(camera_id_raw)
+async def camera_snapshot(camera_id: str, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id)
     """Grab a single JPEG frame from a camera's MJPEG stream and save to filesystem."""
     import time
 
@@ -141,8 +141,8 @@ async def camera_snapshot(camera_id_raw: str, **kwargs) -> str:
     return f"Snapshot saved: {filename} ({len(frame)} bytes). Use send_media to deliver it to the user."
 
 
-async def start_recording(camera_id_raw: str, **kwargs) -> str:
-    camera_id = await _resolve_camera_id(camera_id_raw)
+async def start_recording(camera_id: str, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id)
     try:
         result = await _api_post(f"/api/cameras/{camera_id}/recording/start")
         return f"Recording started: {json.dumps(result)}"
@@ -150,8 +150,8 @@ async def start_recording(camera_id_raw: str, **kwargs) -> str:
         return f"Error starting recording: {e}"
 
 
-async def stop_recording(camera_id_raw: str, **kwargs) -> str:
-    camera_id = await _resolve_camera_id(camera_id_raw)
+async def stop_recording(camera_id: str, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id)
     try:
         result = await _api_post(f"/api/cameras/{camera_id}/recording/stop")
         return f"Recording stopped: {json.dumps(result)}"
@@ -661,8 +661,8 @@ async def delete_cron_job(cron_id: str, **kwargs) -> str:
         return f"Error deleting cron job: {e}"
 
 
-async def analyze_camera(camera_id_raw: str, mode: str = "snapshot", duration: int = 5, **kwargs) -> str:
-    camera_id = await _resolve_camera_id(camera_id_raw)
+async def analyze_camera(camera_id: str, mode: str = "snapshot", duration: int = 5, **kwargs) -> str:
+    camera_id = await _resolve_camera_id(camera_id)
     """Capture frame(s) from a camera's MJPEG stream and analyze with vision AI.
 
     Uses pure-Python MJPEG parsing (no ffmpeg dependency). In 'clip' mode,
