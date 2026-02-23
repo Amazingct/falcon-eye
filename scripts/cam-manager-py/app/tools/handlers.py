@@ -976,7 +976,7 @@ async def send_media(path: str, caption: str = "", media_type: str = "auto", **k
             url = path
         else:
             encoded = "/".join(quote(seg, safe="") for seg in path.split("/"))
-            url = f"/api/files/{encoded}"
+            url = f"/api/files/read/{encoded}"
 
         media_entry = {
             "path": path,
@@ -1067,7 +1067,7 @@ async def deliver_media_message(
             url = path
         else:
             encoded = "/".join(quote(seg, safe="") for seg in path.split("/"))
-            url = f"/api/files/{encoded}"
+            url = f"/api/files/read/{encoded}"
         if pending is not None:
             pending.append({
                 "path": path,

@@ -269,7 +269,7 @@ async def send_message(
                         m["url"] = p
                     else:
                         encoded = "/".join(quote(seg, safe="") for seg in p.split("/"))
-                        m["url"] = f"/api/files/{encoded}"
+                        m["url"] = f"/api/files/read/{encoded}"
                 media_content = {"media": [m]}
                 media_msg = AgentChatMessage(
                     agent_id=agent_id,
