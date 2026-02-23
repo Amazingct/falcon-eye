@@ -1,5 +1,6 @@
 import React from 'react'
 import { Download, Camera, Clock } from 'lucide-react'
+import { authUrl } from '../App'
 
 function encodePathPreserveSlashes(p) {
   return p.split('/').map(encodeURIComponent).join('/')
@@ -36,7 +37,12 @@ function isAudioExt(ext) {
 
 export default function ChatMedia({ content, apiUrl }) {
   const generalCaption = content?.general_caption ?? null
-  const items = Array.isArray(content?.media) ? content.media : []
+  // Support both structured format {general_caption, media: [...]} and legacy single object {path, url, ...}
+  let items = Array.isArray(content?.media) ? content.media : []
+  if (!items.length && content && (content.path || content.url) && !content.media) {
+    // Legacy: content is a single media object — wrap it
+    items = [content]
+  }
 
   if (!items.length && !generalCaption) {
     return <div className="text-sm text-gray-300">(no media)</div>
@@ -51,7 +57,8 @@ export default function ChatMedia({ content, apiUrl }) {
       <div className="grid grid-cols-1 gap-2">
         {items.map((item, idx) => {
           const ext = extLower(item)
-          const url = resolveMediaUrl(apiUrl, item?.path || '', item?.cloud_url)
+          const rawUrl = resolveMediaUrl(apiUrl, item?.path || '', item?.cloud_url)
+          const url = authUrl(rawUrl)
           const caption = item?.caption ?? null
           const name = item?.name ?? null
           const cam = item?.cam ?? null

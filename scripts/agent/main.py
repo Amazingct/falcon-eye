@@ -331,9 +331,25 @@ async def process_message(message_text: str, session_id: str,
         )
 
         # Save media messages to DB so they persist across session loads
+        # Wrap in the structured format that ChatMedia expects: {general_caption, media: [...]}
         if media:
-            for m in media:
-                await save_message(session_id, "assistant_media", m, source)
+            media_payload = {
+                "general_caption": None,
+                "media": [
+                    {
+                        "name": os.path.basename(m.get("path", "") or ""),
+                        "path": m.get("path", ""),
+                        "cloud_url": m.get("cloud_url"),
+                        "url": m.get("url"),
+                        "caption": m.get("caption", ""),
+                        "type": os.path.splitext(m.get("path", ""))[1].lstrip(".") or m.get("media_type", "file"),
+                        "cam": None,
+                        "timestamps": None,
+                    }
+                    for m in media
+                ],
+            }
+            await save_message(session_id, "assistant_media", media_payload, source)
 
         result: dict = {"response": response_text, "session_id": session_id}
         if media:
@@ -435,9 +451,25 @@ async def start_telegram_bot():
             await chat.send_message(f"(could not download: {file_path})")
             return
 
+        # Sanity check: if we got a tiny response that looks like JSON error, don't send it as media
+        if len(file_bytes) < 500:
+            try:
+                import json as _json
+                _json.loads(file_bytes)
+                # It's JSON — likely an error response, not actual media
+                logger.error(f"Got JSON error instead of media file from {file_path}: {file_bytes[:200]}")
+                await chat.send_message(f"(download returned an error for: {os.path.basename(file_path)})")
+                return
+            except (ValueError, UnicodeDecodeError):
+                pass  # Not JSON, proceed normally
+
         import io
         buf = io.BytesIO(file_bytes)
-        buf.name = os.path.basename(file_path)
+        buf.name = os.path.basename(file_path) or "download"
+        # Ensure filename has an extension for Telegram to handle it properly
+        if "." not in buf.name:
+            ext_map = {"photo": ".jpg", "video": ".mp4", "document": ""}
+            buf.name += ext_map.get(media_type, "")
 
         try:
             if media_type == "photo":
