@@ -173,7 +173,7 @@ async def list_recordings(camera_id: str = None, **kwargs) -> str:
         cloud = " ☁️" if r.get("cloud_url") else ""
         dl_url = f"/api/recordings/{r['id']}/download"
         summary.append(f"- {r['file_name']} ({r['status']}, {dur}{cloud}) [id: {r['id']}] download: {dl_url}")
-    return f"Found {len(recs)} recordings:\n" + "\n".join(summary) + "\n\nTo send a recording to the user, use send_media with the download path."
+    return f"Found {len(recs)} recordings:\n" + "\n".join(summary) + "\n\nTo send a recording to the user, use send_recording with the recording id."
 
 
 async def get_recording(recording_id: str, **kwargs) -> str:
@@ -203,10 +203,61 @@ async def get_recording(recording_id: str, **kwargs) -> str:
             f"Cloud URL: {result.get('cloud_url', 'N/A')}\n"
             f"Download URL: {dl_url}\n"
             f"Created: {result.get('created_at', 'N/A')}\n\n"
-            f"To send this recording to the user, call send_media with path='{dl_url}'"
+            f"To send this recording to the user, call send_recording with recording_id='{recording_id}'"
         )
     except Exception as e:
         return f"Error getting recording: {e}"
+
+
+async def send_recording(recording_id: str, caption: str = "", **kwargs) -> str:
+    """Send a recording to the user as an inline video.
+    Accepts either a recording ID or a filename — resolves to the correct download URL."""
+    try:
+        # If it looks like a filename, search recordings to find the ID
+        if "." in recording_id and not recording_id.startswith("/"):
+            result = await _api_get("/api/recordings/")
+            recs = result.get("recordings", [])
+            match = None
+            for r in recs:
+                if r.get("file_name") == recording_id or recording_id in (r.get("file_name") or ""):
+                    match = r
+                    break
+            if not match:
+                return f"Recording not found: {recording_id}"
+            recording_id = match["id"]
+            if not caption:
+                dur = match.get("duration_seconds", "?")
+                camera = match.get("camera_name") or "camera"
+                caption = f"{match['file_name']} ({dur}s) — {camera}"
+
+        # Verify the recording exists
+        rec = await _api_get(f"/api/recordings/{recording_id}")
+        dl_url = f"/api/recordings/{recording_id}/download"
+
+        if not caption:
+            dur = rec.get("duration_seconds", "?")
+            camera = rec.get("camera_name") or "camera"
+            caption = f"{rec.get('file_name', 'recording')} ({dur}s) — {camera}"
+
+        # Queue it as video media
+        media_entry = {
+            "path": dl_url,
+            "url": dl_url,
+            "caption": caption,
+            "media_type": "video",
+            "size": rec.get("file_size_bytes"),
+            "mime_type": "video/mp4",
+        }
+
+        ctx = kwargs.get("_agent_context", {})
+        if "pending_media" in ctx:
+            ctx["pending_media"].append(media_entry)
+            return f"Sent recording: {rec.get('file_name', recording_id)} ({rec.get('duration_seconds', '?')}s)"
+        else:
+            return f"Recording ready but no media queue available. Download URL: {dl_url}"
+
+    except Exception as e:
+        return f"Error sending recording: {e}"
 
 
 async def list_nodes(**kwargs) -> str:

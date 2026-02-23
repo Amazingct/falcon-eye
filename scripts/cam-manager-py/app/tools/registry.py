@@ -102,6 +102,20 @@ TOOLS_REGISTRY = {
         },
         "handler": "app.tools.handlers.get_recording",
     },
+    "send_recording": {
+        "name": "send_recording",
+        "description": "Send a recording to the user's chat as an inline video. Accepts a recording ID (from list_recordings) or a filename. This is the preferred way to send recordings — do NOT use send_media with recording paths.",
+        "category": "recording",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recording_id": {"type": "string", "description": "Recording ID or filename (e.g. '4036299e_20260222181402' or 'UVC_Camera_046d0825_20260222_181402.mp4')"},
+                "caption": {"type": "string", "description": "Caption for the video (optional)", "default": ""},
+            },
+            "required": ["recording_id"],
+        },
+        "handler": "app.tools.handlers.send_recording",
+    },
     "node_list": {
         "name": "list_nodes",
         "description": "Get cluster nodes and their health status",
