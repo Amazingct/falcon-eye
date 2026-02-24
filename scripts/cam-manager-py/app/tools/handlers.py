@@ -244,10 +244,13 @@ async def send_recording(recording_id: str, caption: str = "", **kwargs) -> str:
             camera = rec.get("camera_name") or "camera"
             caption = f"{rec.get('file_name', 'recording')} ({dur}s) — {camera}"
 
-        # Queue it as video media
+        # Queue it as video media — include cloud_url and file_path so the
+        # agent can download directly if the API proxy times out.
         media_entry = {
             "path": dl_url,
             "url": dl_url,
+            "cloud_url": rec.get("cloud_url"),
+            "file_path": rec.get("file_path"),
             "caption": caption,
             "media_type": "video",
             "size": rec.get("file_size_bytes"),

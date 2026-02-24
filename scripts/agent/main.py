@@ -372,7 +372,12 @@ async def process_message(message_text: str, session_id: str,
         return {"response": f"Error: {e}"}
 
 
-async def download_file(path: str) -> bytes | None:
+async def download_file(path: str, timeout: int = 300) -> bytes | None:
+    """Download a file from a URL, API path, or filesystem path.
+    
+    Uses streaming to handle large files (e.g. video recordings) without
+    loading the entire response before checking status.
+    """
     try:
         # Determine the full URL based on path type
         if path.startswith("http://") or path.startswith("https://"):
@@ -382,7 +387,7 @@ async def download_file(path: str) -> bytes | None:
         else:
             url = f"{API_URL}/api/files/read/{path}"  # Filesystem path
 
-        async with httpx.AsyncClient(timeout=60, headers=_api_headers()) as client:
+        async with httpx.AsyncClient(timeout=timeout, headers=_api_headers(), follow_redirects=True) as client:
             res = await client.get(url)
             if res.status_code == 200:
                 content_type = res.headers.get("content-type", "")
@@ -452,31 +457,78 @@ async def start_telegram_bot():
             logger.warning(f"Failed to persist chat_id: {e}")
 
     async def send_media_to_chat(chat, media_item, bot):
-        # Prioritize: url > cloud_url > path
-        file_path = media_item.get("url") or media_item.get("cloud_url") or media_item.get("path", "")
         caption = media_item.get("caption", "")
         media_type = media_item.get("media_type", "document")
 
-        file_bytes = await download_file(file_path)
+        # Try multiple sources in order: local file_path, API download URL, cloud URL
+        file_bytes = None
+        sources_to_try = []
+
+        # 1. Local file path (fastest — no network)
+        local_path = media_item.get("file_path")
+        if local_path and os.path.exists(local_path):
+            try:
+                with open(local_path, "rb") as f:
+                    file_bytes = f.read()
+                logger.info(f"Loaded media from local path: {local_path}")
+            except Exception as e:
+                logger.warning(f"Failed to read local file {local_path}: {e}")
+
+        # 2. API download endpoint (handles both local + cloud via proxy)
         if not file_bytes:
-            await chat.send_message(f"(could not download: {file_path})")
+            api_path = media_item.get("url") or media_item.get("path", "")
+            if api_path:
+                file_bytes = await download_file(api_path, timeout=300)
+                if file_bytes:
+                    logger.info(f"Downloaded media via API: {api_path}")
+
+        # 3. Direct cloud URL (fallback if API proxy failed)
+        if not file_bytes:
+            cloud_url = media_item.get("cloud_url")
+            if cloud_url:
+                file_bytes = await download_file(cloud_url, timeout=300)
+                if file_bytes:
+                    logger.info(f"Downloaded media from cloud: {cloud_url}")
+
+        if not file_bytes:
+            tried = ", ".join(filter(None, [
+                media_item.get("file_path"),
+                media_item.get("url"),
+                media_item.get("cloud_url"),
+            ]))
+            await chat.send_message(f"(could not download recording from any source: {tried})")
             return
+
+        # Determine a display name for the file
+        display_name = os.path.basename(
+            media_item.get("file_path") or media_item.get("url") or media_item.get("path") or "download"
+        )
 
         # Sanity check: if we got a tiny response that looks like JSON error, don't send it as media
         if len(file_bytes) < 500:
             try:
                 import json as _json
                 _json.loads(file_bytes)
-                # It's JSON — likely an error response, not actual media
-                logger.error(f"Got JSON error instead of media file from {file_path}: {file_bytes[:200]}")
-                await chat.send_message(f"(download returned an error for: {os.path.basename(file_path)})")
+                logger.error(f"Got JSON error instead of media file: {file_bytes[:200]}")
+                await chat.send_message(f"(download returned an error for: {display_name})")
                 return
             except (ValueError, UnicodeDecodeError):
                 pass  # Not JSON, proceed normally
 
+        # Telegram bot API limit: 50MB for files
+        TELEGRAM_MAX_BYTES = 50 * 1024 * 1024
+        if len(file_bytes) > TELEGRAM_MAX_BYTES:
+            size_mb = len(file_bytes) / (1024 * 1024)
+            cloud_url = media_item.get("cloud_url")
+            msg = f"Recording is too large for Telegram ({size_mb:.1f}MB, limit is 50MB)."
+            if cloud_url:
+                msg += f"\n\nDirect download link:\n{cloud_url}"
+            await chat.send_message(msg)
+            return
+
         import io
         buf = io.BytesIO(file_bytes)
-        buf.name = os.path.basename(file_path) or "download"
+        buf.name = display_name
         # Ensure filename has an extension for Telegram to handle it properly
         if "." not in buf.name:
             ext_map = {"photo": ".jpg", "video": ".mp4", "document": ""}
@@ -490,8 +542,20 @@ async def start_telegram_bot():
             else:
                 await bot.send_document(chat_id=chat.id, document=buf, caption=caption or None)
         except Exception as e:
-            logger.error(f"Failed to send media {file_path}: {e}")
-            await chat.send_message(f"(failed to send {os.path.basename(file_path)}: {e})")
+            logger.error(f"Failed to send media {display_name}: {e}")
+            # If send fails, try sending as document (less restrictive)
+            if media_type == "video":
+                try:
+                    buf.seek(0)
+                    await bot.send_document(chat_id=chat.id, document=buf, caption=caption or None)
+                    return
+                except Exception:
+                    pass
+            cloud_url = media_item.get("cloud_url")
+            fallback = f"(failed to send {display_name}: {e})"
+            if cloud_url:
+                fallback += f"\n\nDirect link: {cloud_url}"
+            await chat.send_message(fallback)
 
     async def handle_message(update: Update, context):
         if not update.message:
