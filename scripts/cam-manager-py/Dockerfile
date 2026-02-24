@@ -25,10 +25,11 @@ LABEL version="1.0.0"
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies (ffmpeg for video transcoding)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user first

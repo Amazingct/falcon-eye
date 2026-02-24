@@ -1,5 +1,5 @@
 """Recordings API routes"""
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete
@@ -8,14 +8,120 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 import os
+import logging
+import subprocess
+import tempfile
+import hashlib
 import httpx
 
 from app.database import get_db
 from app.config import get_settings
 from app.models.recording import Recording, RecordingStatus
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/recordings", tags=["recordings"])
 settings = get_settings()
+
+# Transcoding cache directory
+TRANSCODE_CACHE_DIR = "/tmp/falcon-eye-transcode-cache"
+os.makedirs(TRANSCODE_CACHE_DIR, exist_ok=True)
+
+
+def _probe_codec(file_path: str) -> str:
+    """Probe video codec using ffprobe. Returns codec name (e.g. 'hevc', 'h264')."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", file_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.stdout.strip().lower()
+    except Exception as e:
+        logger.warning(f"ffprobe failed for {file_path}: {e}")
+        return ""
+
+
+def _needs_transcode(codec: str) -> bool:
+    """Check if codec needs transcoding for web playback."""
+    # HEVC/H.265 and VP9 don't play in all browsers
+    return codec in ("hevc", "h265", "av1")
+
+
+def _get_cache_path(recording_id: str) -> str:
+    """Get the cache path for a transcoded recording."""
+    safe_id = hashlib.md5(recording_id.encode()).hexdigest()
+    return os.path.join(TRANSCODE_CACHE_DIR, f"{safe_id}.mp4")
+
+
+def _transcode_to_h264(input_path: str, output_path: str) -> bool:
+    """Transcode a video to H.264/AAC MP4 for web playback."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", input_path,
+             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+             "-c:a", "aac", "-b:a", "128k",
+             "-movflags", "+faststart",
+             output_path],
+            capture_output=True, text=True, timeout=600,  # 10 min max
+        )
+        if result.returncode != 0:
+            logger.error(f"ffmpeg transcode failed: {result.stderr[-500:]}")
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("ffmpeg transcode timed out (10 min)")
+        return False
+    except Exception as e:
+        logger.error(f"Transcode error: {e}")
+        return False
+
+
+async def _download_to_temp(recording) -> str | None:
+    """Download a recording to a temp file for probing/transcoding."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        if recording.file_path and os.path.exists(recording.file_path):
+            import shutil
+            shutil.copy2(recording.file_path, tmp_path)
+            return tmp_path
+
+        if recording.cloud_url:
+            import boto3
+            provider = os.environ.get("CLOUD_STORAGE_PROVIDER", "spaces")
+            access_key = os.environ.get("CLOUD_STORAGE_ACCESS_KEY", "")
+            secret_key = os.environ.get("CLOUD_STORAGE_SECRET_KEY", "")
+            bucket = os.environ.get("CLOUD_STORAGE_BUCKET", "")
+            region = os.environ.get("CLOUD_STORAGE_REGION", "us-east-1")
+            endpoint = os.environ.get("CLOUD_STORAGE_ENDPOINT", "")
+
+            if not access_key or not secret_key or not bucket:
+                return None
+
+            s3_kwargs = {
+                "service_name": "s3",
+                "aws_access_key_id": access_key,
+                "aws_secret_access_key": secret_key,
+                "region_name": region,
+            }
+            if endpoint:
+                s3_kwargs["endpoint_url"] = f"https://{endpoint}"
+
+            s3 = boto3.client(**s3_kwargs)
+            from urllib.parse import urlparse
+            parsed = urlparse(recording.cloud_url)
+            s3_key = parsed.path.lstrip("/")
+            if s3_key.startswith(f"{bucket}/"):
+                s3_key = s3_key[len(f"{bucket}/"):]
+
+            s3.download_file(bucket, s3_key, tmp_path)
+            return tmp_path
+    except Exception as e:
+        logger.error(f"Failed to download recording for transcoding: {e}")
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+    return None
 
 
 async def _stream_from_cloud(recording: Recording):
@@ -347,6 +453,7 @@ async def _find_file_on_cluster(
 @router.get("/{recording_id}/download")
 async def download_recording(
     recording_id: str,
+    format: Optional[str] = Query(None, description="'web' to auto-transcode HEVC to H.264 for browser playback"),
     db: AsyncSession = Depends(get_db),
 ):
     """Download a recording file.
@@ -354,6 +461,10 @@ async def download_recording(
     Strategy:
     1. Try serving from local volume (works when API shares a node with the file)
     2. Locate the file via the file-server DaemonSet and stream it back
+    
+    If format=web, automatically detects HEVC and transcodes to H.264 for
+    browser compatibility. H.264 recordings are served as-is (no transcoding).
+    Transcoded files are cached to avoid re-transcoding.
     """
     result = await db.execute(
         select(Recording).where(Recording.id == recording_id)
@@ -365,6 +476,10 @@ async def download_recording(
     
     if not recording.file_path and not recording.cloud_url:
         raise HTTPException(status_code=404, detail="No file path for this recording")
+    
+    # If format=web, check for HEVC and transcode if needed
+    if format == "web":
+        return await _serve_web_format(recording)
     
     # 0. Cloud URL is priority — stream from S3/Spaces via API
     if recording.cloud_url:
@@ -410,3 +525,72 @@ async def download_recording(
             "Content-Disposition": f'attachment; filename="{recording.file_name}"',
         },
     )
+
+
+async def _serve_web_format(recording):
+    """Serve a web-compatible version of a recording.
+    
+    - If codec is already H.264: serve original (no transcoding)
+    - If codec is HEVC: transcode to H.264 with caching
+    """
+    cache_path = _get_cache_path(recording.id)
+    
+    # Check cache first
+    if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
+        logger.info(f"Serving transcoded recording from cache: {recording.id}")
+        return FileResponse(
+            cache_path,
+            media_type="video/mp4",
+            filename=recording.file_name,
+        )
+    
+    # Download to temp for probing
+    tmp_path = await _download_to_temp(recording)
+    if not tmp_path:
+        # Fall back to regular download
+        if recording.cloud_url:
+            return await _stream_from_cloud(recording)
+        raise HTTPException(status_code=500, detail="Could not download recording for transcoding")
+    
+    try:
+        codec = _probe_codec(tmp_path)
+        logger.info(f"Recording {recording.id} codec: {codec}")
+        
+        if not _needs_transcode(codec):
+            # Already H.264 or compatible — serve as-is
+            logger.info(f"Recording {recording.id} is {codec}, no transcoding needed")
+            return FileResponse(
+                tmp_path,
+                media_type="video/mp4",
+                filename=recording.file_name,
+            )
+        
+        # Transcode HEVC → H.264
+        logger.info(f"Transcoding recording {recording.id} from {codec} to H.264...")
+        success = _transcode_to_h264(tmp_path, cache_path)
+        
+        if success and os.path.exists(cache_path):
+            logger.info(f"Transcoding complete: {recording.id}")
+            # Clean up temp file now
+            os.unlink(tmp_path)
+            return FileResponse(
+                cache_path,
+                media_type="video/mp4",
+                filename=recording.file_name,
+            )
+        else:
+            # Transcode failed — serve original
+            logger.warning(f"Transcoding failed for {recording.id}, serving original")
+            return FileResponse(
+                tmp_path,
+                media_type="video/mp4",
+                filename=recording.file_name,
+            )
+    except Exception as e:
+        logger.error(f"Web format error for {recording.id}: {e}")
+        # Clean up and fall back
+        if os.path.exists(tmp_path):
+            return FileResponse(tmp_path, media_type="video/mp4", filename=recording.file_name)
+        if recording.cloud_url:
+            return await _stream_from_cloud(recording)
+        raise HTTPException(status_code=500, detail=f"Transcoding error: {e}")

@@ -138,7 +138,7 @@ export default function ChatMedia({ content, apiUrl }) {
                     <video
                       className="mt-2 w-full max-h-80 rounded-md border border-gray-700"
                       controls
-                      src={url}
+                      src={url + (url.includes('?') ? '&' : '?') + 'format=web'}
                     />
                   ) : kind === 'audio' ? (
                     <audio className="mt-2 w-full" controls src={url} />
