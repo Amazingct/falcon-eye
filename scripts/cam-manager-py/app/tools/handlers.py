@@ -789,6 +789,7 @@ async def analyze_camera(camera_id: str, mode: str = "snapshot", duration: int =
             )
             description = await _vision_openai(api_key, model, base_url, b64_images, vision_prompt)
     except Exception as e:
+        logger.error(f"Vision API call failed: provider={provider} model={model} error={e}")
         return f"Vision API call failed: {e}"
 
     return f"[Camera: {cam_name} | Frames: {len(b64_images)} | Duration: {duration}s]\n{description}"
@@ -853,6 +854,7 @@ async def _vision_openai(api_key: str, model: str, base_url: str, b64_images: li
     async with httpx.AsyncClient(timeout=60) as client:
         res = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
         if res.status_code != 200:
+            logger.error(f"Vision OpenAI error: status={res.status_code} model={model} body={res.text[:500]}")
             return f"Vision API error ({res.status_code}): {res.text[:500]}"
         data = res.json()
         return data["choices"][0]["message"].get("content", "")
