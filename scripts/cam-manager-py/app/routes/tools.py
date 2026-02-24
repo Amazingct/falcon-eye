@@ -92,6 +92,8 @@ async def get_agent_chat_config(agent_id: UUID, db: AsyncSession = Depends(get_d
         elif agent.provider == "openai":
             resolved_key = os.getenv("OPENAI_API_KEY", "")
 
+    channel_config = agent.channel_config or {}
+
     return {
         "agent_id": str(agent_id),
         "system_prompt": agent.system_prompt or "You are a helpful AI assistant.",
@@ -99,6 +101,7 @@ async def get_agent_chat_config(agent_id: UUID, db: AsyncSession = Depends(get_d
         "model": agent.model,
         "api_key": resolved_key,
         "max_tokens": agent.max_tokens,
+        "channel_config": channel_config,
         "temperature": agent.temperature,
         "tools_schema": tools_schema,
     }

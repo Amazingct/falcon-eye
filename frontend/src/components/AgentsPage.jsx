@@ -207,6 +207,8 @@ function AgentModal({ agent, onClose, onSave }) {
     max_tokens: agent?.max_tokens || 4096,
     channel_type: agent?.channel_type || '',
     bot_token: agent?.channel_config?.bot_token || '',
+    allowed_users: agent?.channel_config?.allowed_users || [],
+    new_user_id: '',
     tools: agent?.tools || [],
     cpu_limit: agent?.cpu_limit || '500m',
     memory_limit: agent?.memory_limit || '512Mi',
@@ -235,7 +237,7 @@ function AgentModal({ agent, onClose, onSave }) {
       temperature: form.temperature,
       max_tokens: form.max_tokens,
       channel_type: form.channel_type || null,
-      channel_config: form.channel_type === 'telegram' ? { bot_token: form.bot_token } : {},
+      channel_config: form.channel_type === 'telegram' ? { bot_token: form.bot_token, allowed_users: form.allowed_users } : {},
       tools: form.tools,
       cpu_limit: form.cpu_limit,
       memory_limit: form.memory_limit,
@@ -371,10 +373,70 @@ function AgentModal({ agent, onClose, onSave }) {
           </div>
 
           {form.channel_type === 'telegram' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1">Telegram Bot Token</label>
-              <input type="password" value={form.bot_token} onChange={e => setForm({ ...form, bot_token: e.target.value })} className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono text-sm" placeholder="123456:ABC-DEF..." />
-            </div>
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Telegram Bot Token</label>
+                <input type="password" value={form.bot_token} onChange={e => setForm({ ...form, bot_token: e.target.value })} className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono text-sm" placeholder="123456:ABC-DEF..." />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Allowed Users
+                  <span className="text-xs text-gray-500 ml-2">
+                    {form.allowed_users.length === 0 ? '(open to all — add IDs to restrict)' : `(${form.allowed_users.length} user${form.allowed_users.length !== 1 ? 's' : ''})`}
+                  </span>
+                </label>
+                <div className="space-y-2">
+                  {form.allowed_users.map((uid, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 font-mono text-sm text-gray-200">{uid}</span>
+                      <button
+                        type="button"
+                        onClick={() => setForm({ ...form, allowed_users: form.allowed_users.filter((_, i) => i !== idx) })}
+                        className="px-2 py-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition-colors"
+                        title="Remove user"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={form.new_user_id}
+                      onChange={e => setForm({ ...form, new_user_id: e.target.value.replace(/\D/g, '') })}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && form.new_user_id.trim()) {
+                          e.preventDefault()
+                          const uid = form.new_user_id.trim()
+                          if (!form.allowed_users.includes(uid)) {
+                            setForm({ ...form, allowed_users: [...form.allowed_users, uid], new_user_id: '' })
+                          }
+                        }
+                      }}
+                      className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono text-sm"
+                      placeholder="Telegram User ID"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const uid = form.new_user_id.trim()
+                        if (uid && !form.allowed_users.includes(uid)) {
+                          setForm({ ...form, allowed_users: [...form.allowed_users, uid], new_user_id: '' })
+                        }
+                      }}
+                      className="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm transition-colors"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Add Telegram user IDs to restrict access. Leave empty to allow everyone.
+                    Users can find their ID via @userinfobot on Telegram.
+                  </p>
+                </div>
+              </div>
+            </>
           )}
 
           {/* Tools */}

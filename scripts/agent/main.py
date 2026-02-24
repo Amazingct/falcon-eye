@@ -185,6 +185,8 @@ _chat_config_cache: dict | None = None
 _chat_config_ts: float = 0
 
 
+_on_config_refresh_callbacks: list = []
+
 async def fetch_chat_config() -> dict:
     """Fetch agent chat config (tools, system prompt, etc.) from the API. Cached for 60s."""
     import time
@@ -200,6 +202,12 @@ async def fetch_chat_config() -> dict:
             if res.status_code == 200:
                 _chat_config_cache = res.json()
                 _chat_config_ts = now
+                # Notify callbacks (e.g. refresh allowlist)
+                for cb in _on_config_refresh_callbacks:
+                    try:
+                        cb(_chat_config_cache)
+                    except Exception:
+                        pass
                 return _chat_config_cache
     except Exception as e:
         logger.error(f"Failed to fetch chat config: {e}")
@@ -557,18 +565,35 @@ async def start_telegram_bot():
                 fallback += f"\n\nDirect link: {cloud_url}"
             await chat.send_message(fallback)
 
-    # Allowed users list — comma-separated Telegram user IDs (env var).
-    # If empty/unset, ALL users are allowed (open mode).
-    _allowed_env = os.getenv("TELEGRAM_ALLOWED_USERS", "").strip()
+    # Allowed users — loaded from agent's channel_config (DB) via chat-config API.
+    # Falls back to TELEGRAM_ALLOWED_USERS env var.
+    # If both are empty, bot is open to ALL users.
     allowed_user_ids: set[int] = set()
-    if _allowed_env:
-        for uid in _allowed_env.split(","):
-            uid = uid.strip()
-            if uid.isdigit():
-                allowed_user_ids.add(int(uid))
-        logger.info(f"Telegram user allowlist: {allowed_user_ids}")
-    else:
-        logger.warning("TELEGRAM_ALLOWED_USERS not set — bot is open to ALL users")
+    _allowlist_loaded = False
+
+    async def _load_allowed_users():
+        """Load allowed user IDs from agent config (channel_config.allowed_users)."""
+        nonlocal allowed_user_ids, _allowlist_loaded
+        try:
+            config = await fetch_chat_config()
+            channel_cfg = config.get("channel_config", {})
+            db_users = channel_cfg.get("allowed_users", [])
+            if db_users:
+                allowed_user_ids = {int(uid) for uid in db_users if str(uid).isdigit()}
+                logger.info(f"Telegram allowlist from DB: {allowed_user_ids}")
+                _allowlist_loaded = True
+                return
+        except Exception as e:
+            logger.warning(f"Failed to load allowlist from API: {e}")
+
+        # Fallback to env var
+        _allowed_env = os.getenv("TELEGRAM_ALLOWED_USERS", "").strip()
+        if _allowed_env:
+            allowed_user_ids = {int(uid.strip()) for uid in _allowed_env.split(",") if uid.strip().isdigit()}
+            logger.info(f"Telegram allowlist from env: {allowed_user_ids}")
+        else:
+            logger.warning("No Telegram allowlist configured — bot is open to ALL users")
+        _allowlist_loaded = True
 
     def _is_authorized(update: Update) -> bool:
         """Check if the user is authorized to use this bot."""
@@ -579,9 +604,24 @@ async def start_telegram_bot():
             return False
         return user.id in allowed_user_ids
 
+    # Register callback to refresh allowlist when config cache refreshes
+    def _on_config_refresh(config: dict):
+        nonlocal allowed_user_ids
+        channel_cfg = config.get("channel_config", {})
+        db_users = channel_cfg.get("allowed_users", [])
+        if db_users:
+            new_ids = {int(uid) for uid in db_users if str(uid).isdigit()}
+            if new_ids != allowed_user_ids:
+                allowed_user_ids = new_ids
+                logger.info(f"Telegram allowlist refreshed: {allowed_user_ids}")
+    _on_config_refresh_callbacks.append(_on_config_refresh)
+
     async def handle_message(update: Update, context):
         if not update.message:
             return
+        # Load allowlist on first message
+        if not _allowlist_loaded:
+            await _load_allowed_users()
         if not _is_authorized(update):
             await update.message.reply_text(
                 "⛔ Access denied. You are not authorized to use this bot."
