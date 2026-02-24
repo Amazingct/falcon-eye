@@ -77,50 +77,82 @@ def _transcode_to_h264(input_path: str, output_path: str) -> bool:
 
 
 async def _download_to_temp(recording) -> str | None:
-    """Download a recording to a temp file for probing/transcoding."""
+    """Download a recording to a temp file for probing/transcoding.
+    
+    Tries in order:
+    1. Local file path (if API pod has access)
+    2. Cloud storage (S3/Spaces) via boto3
+    3. File-server DaemonSet (for files on other cluster nodes)
+    """
     tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp_path = tmp.name
     tmp.close()
     try:
+        # 1. Local file
         if recording.file_path and os.path.exists(recording.file_path):
             import shutil
             shutil.copy2(recording.file_path, tmp_path)
+            logger.info(f"Copied local file for transcoding: {recording.file_path}")
             return tmp_path
 
+        # 2. Cloud storage
         if recording.cloud_url:
-            import boto3
-            provider = os.environ.get("CLOUD_STORAGE_PROVIDER", "spaces")
-            access_key = os.environ.get("CLOUD_STORAGE_ACCESS_KEY", "")
-            secret_key = os.environ.get("CLOUD_STORAGE_SECRET_KEY", "")
-            bucket = os.environ.get("CLOUD_STORAGE_BUCKET", "")
-            region = os.environ.get("CLOUD_STORAGE_REGION", "us-east-1")
-            endpoint = os.environ.get("CLOUD_STORAGE_ENDPOINT", "")
+            try:
+                import boto3
+                access_key = os.environ.get("CLOUD_STORAGE_ACCESS_KEY", "")
+                secret_key = os.environ.get("CLOUD_STORAGE_SECRET_KEY", "")
+                bucket = os.environ.get("CLOUD_STORAGE_BUCKET", "")
+                region = os.environ.get("CLOUD_STORAGE_REGION", "us-east-1")
+                endpoint = os.environ.get("CLOUD_STORAGE_ENDPOINT", "")
 
-            if not access_key or not secret_key or not bucket:
-                return None
+                if access_key and secret_key and bucket:
+                    s3_kwargs = {
+                        "service_name": "s3",
+                        "aws_access_key_id": access_key,
+                        "aws_secret_access_key": secret_key,
+                        "region_name": region,
+                    }
+                    if endpoint:
+                        s3_kwargs["endpoint_url"] = f"https://{endpoint}"
 
-            s3_kwargs = {
-                "service_name": "s3",
-                "aws_access_key_id": access_key,
-                "aws_secret_access_key": secret_key,
-                "region_name": region,
-            }
-            if endpoint:
-                s3_kwargs["endpoint_url"] = f"https://{endpoint}"
+                    s3 = boto3.client(**s3_kwargs)
+                    from urllib.parse import urlparse
+                    parsed = urlparse(recording.cloud_url)
+                    s3_key = parsed.path.lstrip("/")
+                    if s3_key.startswith(f"{bucket}/"):
+                        s3_key = s3_key[len(f"{bucket}/"):]
 
-            s3 = boto3.client(**s3_kwargs)
-            from urllib.parse import urlparse
-            parsed = urlparse(recording.cloud_url)
-            s3_key = parsed.path.lstrip("/")
-            if s3_key.startswith(f"{bucket}/"):
-                s3_key = s3_key[len(f"{bucket}/"):]
+                    s3.download_file(bucket, s3_key, tmp_path)
+                    logger.info(f"Downloaded from cloud for transcoding: {recording.cloud_url}")
+                    return tmp_path
+            except Exception as e:
+                logger.warning(f"Cloud download failed for transcoding: {e}")
 
-            s3.download_file(bucket, s3_key, tmp_path)
-            return tmp_path
+        # 3. File-server DaemonSet (file on another node)
+        camera_id = str(recording.camera_id) if recording.camera_id else None
+        if camera_id and recording.file_name:
+            remote_url = await _find_file_on_cluster(
+                camera_id,
+                recording.file_name,
+                hint_node=getattr(recording, "node_name", None),
+            )
+            if remote_url:
+                try:
+                    async with httpx.AsyncClient(timeout=300) as client:
+                        async with client.stream("GET", remote_url) as resp:
+                            with open(tmp_path, "wb") as f:
+                                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                                    f.write(chunk)
+                    logger.info(f"Downloaded from file-server for transcoding: {remote_url}")
+                    return tmp_path
+                except Exception as e:
+                    logger.warning(f"File-server download failed: {e}")
+
     except Exception as e:
         logger.error(f"Failed to download recording for transcoding: {e}")
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+
+    if os.path.exists(tmp_path) and os.path.getsize(tmp_path) == 0:
+        os.unlink(tmp_path)
     return None
 
 
