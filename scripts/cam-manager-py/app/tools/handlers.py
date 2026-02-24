@@ -1138,6 +1138,7 @@ HANDLER_MAP = {
     "app.tools.handlers.stop_recording": stop_recording,
     "app.tools.handlers.list_recordings": list_recordings,
     "app.tools.handlers.get_recording": get_recording,
+    "app.tools.handlers.send_recording": send_recording,
     "app.tools.handlers.list_nodes": list_nodes,
     "app.tools.handlers.scan_cameras": scan_cameras,
     "app.tools.handlers.system_info": system_info,
