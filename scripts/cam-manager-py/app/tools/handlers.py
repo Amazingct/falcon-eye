@@ -176,9 +176,8 @@ async def list_recordings(camera_id: str = None, **kwargs) -> str:
     for r in recs:
         dur = f"{r.get('duration_seconds', '?')}s" if r.get("duration_seconds") else "in progress"
         cloud = " ☁️" if r.get("cloud_url") else ""
-        dl_url = f"/api/recordings/{r['id']}/download"
-        summary.append(f"- {r['file_name']} ({r['status']}, {dur}{cloud}) [id: {r['id']}] download: {dl_url}")
-    return f"Found {len(recs)} recordings:\n" + "\n".join(summary) + "\n\nTo send a recording to the user, use send_recording with the recording id."
+        summary.append(f"- {r['file_name']} ({r['status']}, {dur}{cloud}) [id: {r['id']}]")
+    return f"Found {len(recs)} recordings:\n" + "\n".join(summary) + "\n\n⚠️ IMPORTANT: To send a recording to the user, you MUST call the send_recording tool with the recording id. Do NOT share URLs directly — the user needs the video delivered inline."
 
 
 async def get_recording(recording_id: str, **kwargs) -> str:
@@ -196,7 +195,6 @@ async def get_recording(recording_id: str, **kwargs) -> str:
             f"Recording: {result.get('file_name', 'unknown')}\n"
             f"ID: {result.get('id', recording_id)}\n"
             f"Camera: {camera_name}\n"
-            f"Camera ID: {result.get('camera_id', 'unknown')}\n"
             f"Node: {node}\n"
             f"Status: {result.get('status', 'unknown')}\n"
             f"Start: {result.get('start_time', 'N/A')}\n"
@@ -204,11 +202,9 @@ async def get_recording(recording_id: str, **kwargs) -> str:
             f"Duration: {result.get('duration_seconds', '?')}s\n"
             f"File size: {size_str}\n"
             f"Resolution: {result.get('resolution', 'N/A')}\n"
-            f"File path (local): {result.get('file_path', 'N/A')}\n"
-            f"Cloud URL: {result.get('cloud_url', 'N/A')}\n"
-            f"Download URL: {dl_url}\n"
+            f"Storage: {'cloud' if result.get('cloud_url') else 'local'}\n"
             f"Created: {result.get('created_at', 'N/A')}\n\n"
-            f"To send this recording to the user, call send_recording with recording_id='{recording_id}'"
+            f"⚠️ To deliver this recording to the user, you MUST call send_recording with recording_id='{recording_id}'. Do NOT share any URLs — send_recording handles the download and inline delivery automatically."
         )
     except Exception as e:
         return f"Error getting recording: {e}"
@@ -262,7 +258,7 @@ async def send_recording(recording_id: str, caption: str = "", **kwargs) -> str:
             ctx["pending_media"].append(media_entry)
             return f"Sent recording: {rec.get('file_name', recording_id)} ({rec.get('duration_seconds', '?')}s)"
         else:
-            return f"Recording ready but no media queue available. Download URL: {dl_url}"
+            return f"Recording queued for delivery but media queue was unavailable. The system will retry. Tell the user the recording is being sent and to wait a moment."
 
     except Exception as e:
         return f"Error sending recording: {e}"
