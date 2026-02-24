@@ -34,13 +34,18 @@ async def list_tools():
 @router.post("/api/tools/execute")
 async def execute_tool_endpoint(data: ToolExecuteRequest):
     """Execute a tool by name. Used by agent pods to run tools via the API."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Tool execute: {data.tool_name} args={list(data.arguments.keys())}")
     try:
         result, media = await execute_tool(data.tool_name, data.arguments, agent_context=data.agent_context)
         resp: dict = {"result": result}
         if media:
+            logger.info(f"Tool {data.tool_name} returned {len(media)} media item(s)")
             resp["media"] = media
         return resp
     except Exception as e:
+        logger.error(f"Tool {data.tool_name} error: {e}")
         return {"result": f"Tool execution error: {e}", "error": True}
 
 
