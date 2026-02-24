@@ -557,8 +557,37 @@ async def start_telegram_bot():
                 fallback += f"\n\nDirect link: {cloud_url}"
             await chat.send_message(fallback)
 
+    # Allowed users list — comma-separated Telegram user IDs (env var).
+    # If empty/unset, ALL users are allowed (open mode).
+    _allowed_env = os.getenv("TELEGRAM_ALLOWED_USERS", "").strip()
+    allowed_user_ids: set[int] = set()
+    if _allowed_env:
+        for uid in _allowed_env.split(","):
+            uid = uid.strip()
+            if uid.isdigit():
+                allowed_user_ids.add(int(uid))
+        logger.info(f"Telegram user allowlist: {allowed_user_ids}")
+    else:
+        logger.warning("TELEGRAM_ALLOWED_USERS not set — bot is open to ALL users")
+
+    def _is_authorized(update: Update) -> bool:
+        """Check if the user is authorized to use this bot."""
+        if not allowed_user_ids:
+            return True  # No allowlist = open mode
+        user = update.effective_user
+        if not user:
+            return False
+        return user.id in allowed_user_ids
+
     async def handle_message(update: Update, context):
         if not update.message:
+            return
+        if not _is_authorized(update):
+            await update.message.reply_text(
+                "⛔ Access denied. You are not authorized to use this bot."
+            )
+            user = update.effective_user
+            logger.warning(f"Unauthorized access attempt: user_id={user.id if user else '?'} username={user.username if user else '?'}")
             return
         chat_id = update.effective_chat.id
         user = update.effective_user
@@ -657,6 +686,9 @@ async def start_telegram_bot():
             await send_media_to_chat(update.effective_chat, item, context.bot)
 
     async def handle_start(update: Update, context):
+        if not _is_authorized(update):
+            await update.message.reply_text("⛔ Access denied. You are not authorized to use this bot.")
+            return
         chat_id = update.effective_chat.id
         chat_sessions[chat_id] = str(uuid.uuid4())
         asyncio.ensure_future(persist_chat_id(chat_id))
