@@ -834,23 +834,40 @@ async def _capture_mjpeg_frames(stream_url: str, count: int = 1,
 
 
 async def _vision_openai(api_key: str, model: str, base_url: str, b64_images: list[str], prompt: str) -> str:
-    """Send images to an OpenAI-compatible vision endpoint."""
+    """Send images to an OpenAI-compatible vision endpoint.
+    
+    Dynamically adapts to the model:
+    - GPT-5+ models require max_completion_tokens (not max_tokens)
+    - GPT-5+ models don't support the 'detail' parameter on image_url
+    - Older models (gpt-4o, gpt-4.1, etc.) use max_tokens + detail
+    """
+    # Detect if this is a GPT-5+ model
+    is_gpt5_plus = any(model.startswith(prefix) for prefix in ("gpt-5", "o3", "o4"))
+
     content: list[dict] = [{"type": "text", "text": prompt}]
     for img in b64_images:
+        image_entry: dict = {"url": f"data:image/jpeg;base64,{img}"}
+        if not is_gpt5_plus:
+            image_entry["detail"] = "low"
         content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{img}", "detail": "low"},
+            "image_url": image_entry,
         })
 
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    payload = {
+    payload: dict = {
         "model": model,
         "messages": [{"role": "user", "content": content}],
-        "max_tokens": 1024,
     }
+    # GPT-5+ requires max_completion_tokens instead of max_tokens
+    if is_gpt5_plus:
+        payload["max_completion_tokens"] = 1024
+    else:
+        payload["max_tokens"] = 1024
+
     async with httpx.AsyncClient(timeout=60) as client:
         res = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
         if res.status_code != 200:
