@@ -202,13 +202,24 @@ async def _start_new_chunk() -> bool:
 
 
 async def monitor_ffmpeg_process(recording_id: str, log_path: str):
-    """Continuously monitor the FFmpeg process. On normal exit (chunk complete), starts next chunk."""
+    """Monitor the FFmpeg process with a hard wall-clock timer for chunk rotation.
+    
+    ffmpeg's -t flag is unreliable for MJPEG and some RTSP streams, so we
+    enforce chunk duration from Python using wall-clock time.  When the timer
+    fires we gracefully stop ffmpeg (SIGINT), finalize the chunk, and start
+    the next one.
+    """
     global current_process, current_recording, _stop_requested
+
+    chunk_seconds = RECORDING_CHUNK_MINUTES * 60
+    chunk_start = asyncio.get_event_loop().time()
 
     await asyncio.sleep(3)
 
     try:
         while current_process is not None:
+            elapsed = asyncio.get_event_loop().time() - chunk_start
+
             exit_code = current_process.poll()
             if exit_code is not None:
                 recording_info = dict(current_recording) if current_recording else {}
@@ -221,8 +232,9 @@ async def monitor_ffmpeg_process(recording_id: str, log_path: str):
                     except Exception:
                         pass
 
-                if exit_code == 0:
-                    logger.info("FFmpeg chunk finished normally for recording %s", recording_id)
+                if exit_code == 0 or (exit_code == -2 and not _stop_requested):
+                    # exit_code 0 = ffmpeg -t finished, -2 = SIGINT from our timer
+                    logger.info("FFmpeg chunk finished for recording %s (exit=%d, elapsed=%.0fs)", recording_id, exit_code, elapsed)
                     await _finalize_chunk(recording_info)
 
                     # If not explicitly stopped, start the next chunk
@@ -247,6 +259,22 @@ async def monitor_ffmpeg_process(recording_id: str, log_path: str):
                 current_process = None
                 current_recording = None
                 return
+
+            # Wall-clock chunk timer — force rotation if ffmpeg hasn't stopped
+            if elapsed >= chunk_seconds and not _stop_requested:
+                logger.info("Chunk timer expired (%.0fs >= %ds), stopping ffmpeg for %s", elapsed, chunk_seconds, recording_id)
+                try:
+                    current_process.send_signal(signal.SIGINT)
+                except OSError:
+                    pass
+                # Give ffmpeg up to 10s to finalize the file
+                try:
+                    current_process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    logger.warning("FFmpeg didn't stop in 10s after SIGINT, killing")
+                    current_process.kill()
+                    current_process.wait(timeout=5)
+                # Loop will pick up the exit code on next iteration
 
             await asyncio.sleep(5)
     except asyncio.CancelledError:
