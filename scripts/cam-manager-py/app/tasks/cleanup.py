@@ -349,33 +349,41 @@ async def cleanup_uploaded_local_files():
                 except Exception as e:
                     logger.warning(f"Failed to delete local file {file_path}: {e}")
             
-            # File not on this node — try via file-server on the recording's node
-            # Try hint_node first, then all nodes
-            nodes_to_try = []
-            if node_name and node_name in node_pod_ips:
-                nodes_to_try.append(node_name)
-            nodes_to_try.extend(n for n in node_pod_ips if n not in nodes_to_try)
-            
-            remote_path = f"/{camera_id}/{file_name}" if camera_id and file_name else None
-            if not remote_path:
+            # File not on this node — try via recorder pod's DELETE endpoint
+            if not camera_id or not file_name:
                 continue
             
+            # Find recorder pod for this camera
             found_and_deleted = False
-            async with httpx.AsyncClient(timeout=10) as http:
-                for node in nodes_to_try:
-                    pod_ip = node_pod_ips[node]
-                    url = f"http://{pod_ip}:8080{remote_path}"
-                    try:
-                        # Check if file exists
-                        head_res = await http.head(url)
-                        if head_res.status_code != 200:
-                            continue
-                        # File exists on this node — we can't HTTP DELETE with nginx,
-                        # but we can exec into the pod to delete
-                        # For now, just log it and let kubectl handle it
-                        logger.info(f"Found remote file on {node}: {remote_path} (needs manual or exec cleanup)")
-                    except Exception:
+            try:
+                rec_pods = core_api.list_namespaced_pod(
+                    namespace=K8S_NAMESPACE,
+                    label_selector=f"app=falcon-eye,component=recorder,recorder-for={camera_id}",
+                )
+                for pod in rec_pods.items:
+                    if not pod.status.pod_ip or pod.status.phase != "Running":
                         continue
+                    pod_ip = pod.status.pod_ip
+                    async with httpx.AsyncClient(timeout=15) as http:
+                        url = f"http://{pod_ip}:8080/files/{camera_id}/{file_name}"
+                        try:
+                            del_res = await http.delete(url)
+                            if del_res.status_code == 200:
+                                logger.info(f"Deleted remote file via recorder: {camera_id}/{file_name}")
+                                found_and_deleted = True
+                                break
+                            elif del_res.status_code == 404:
+                                logger.info(f"File already gone on recorder: {camera_id}/{file_name}")
+                                found_and_deleted = True
+                                break
+                        except Exception as e:
+                            logger.warning(f"Failed to delete via recorder pod {pod_ip}: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to find recorder pods for {camera_id}: {e}")
+            
+            if not found_and_deleted:
+                # Recorder might be stopped — try file-server nodes as fallback (log only)
+                logger.warning(f"Could not delete {camera_id}/{file_name} — recorder not available")
             
             # Even if remote delete didn't work, clear file_path in DB
             # so the download route uses cloud_url instead

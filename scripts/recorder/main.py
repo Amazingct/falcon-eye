@@ -441,6 +441,27 @@ async def serve_recording_file(camera_id: str, filename: str):
     return FileResponse(file_path, media_type="video/mp4", filename=filename)
 
 
+@app.delete("/files/{camera_id}/{filename}")
+async def delete_recording_file(camera_id: str, filename: str):
+    """Delete a recording file from this node's local storage.
+    Used by the cleanup task after cloud upload."""
+    file_path = os.path.join(RECORDINGS_PATH, camera_id, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on this node")
+    try:
+        file_size = os.path.getsize(file_path)
+        os.remove(file_path)
+        logger.info("Deleted local file via API: %s (%d bytes)", file_path, file_size)
+        # Clean up empty camera directory
+        cam_dir = os.path.join(RECORDINGS_PATH, camera_id)
+        if os.path.isdir(cam_dir) and not os.listdir(cam_dir):
+            os.rmdir(cam_dir)
+            logger.info("Removed empty camera directory: %s", cam_dir)
+        return {"success": True, "deleted": file_path, "size_bytes": file_size}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
+
+
 @app.get("/files")
 async def list_local_files():
     """List all recording files on this node (for debugging)"""
