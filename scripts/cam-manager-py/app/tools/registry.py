@@ -277,6 +277,21 @@ TOOLS_REGISTRY = {
         },
         "handler": "app.tools.handlers.analyze_camera",
     },
+    "recording_analyze": {
+        "name": "analyze_recording",
+        "description": "Analyze an existing recording using vision AI. Extracts frames from the recording and sends them to a vision model with a custom prompt. Use this to ask any question about what happened in a recording — e.g. 'Was anyone in the room?', 'Describe all activity', 'Did anyone enter or leave?'. The recording must be completed or uploaded.",
+        "category": "recordings",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recording_id": {"type": "string", "description": "Recording ID (e.g. camera-uuid_timestamp format)"},
+                "prompt": {"type": "string", "description": "Question or prompt to ask the vision model about the recording. Be specific about what you want to know."},
+                "max_frames": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Maximum number of evenly-spaced frames to extract for analysis.", "default": 5},
+            },
+            "required": ["recording_id"],
+        },
+        "handler": "app.tools.handlers.analyze_recording",
+    },
     "custom_api": {
         "name": "custom_api_call",
         "description": "Call a user-defined HTTP endpoint",

@@ -833,6 +833,137 @@ async def _capture_mjpeg_frames(stream_url: str, count: int = 1,
     return frames
 
 
+async def analyze_recording(recording_id: str, prompt: str = "", max_frames: int = 5, **kwargs) -> str:
+    """Extract frames from an existing recording and analyze with vision AI.
+
+    Downloads the recording (from local, cloud, or file-server), extracts
+    evenly-spaced frames using ffmpeg, then sends them to a vision model.
+    The ``prompt`` parameter is passed as the query to the vision model.
+    """
+    import subprocess
+    import tempfile
+    import glob
+
+    agent_ctx = kwargs.get("_agent_context", {})
+    max_frames = max(1, min(10, max_frames))
+
+    # 1. Get recording info from API
+    try:
+        rec = await _api_get(f"/api/recordings/{recording_id}")
+        if not rec:
+            return f"Recording '{recording_id}' not found."
+    except Exception as e:
+        return f"Error fetching recording: {e}"
+
+    rec_name = rec.get("file_name", recording_id)
+    camera_name = rec.get("camera_name", "unknown camera")
+    status = rec.get("status", "unknown")
+
+    if status not in ("completed", "COMPLETED", "uploaded", "UPLOADED"):
+        return f"Recording '{rec_name}' is not yet complete (status: {status}). Wait for it to finish."
+
+    # 2. Download recording to temp file
+    #    Use the internal download endpoint which handles local/cloud/file-server
+    tmp_video = None
+    try:
+        api_key_header = _INTERNAL_HEADERS.copy()
+        async with httpx.AsyncClient(timeout=300) as client:
+            res = await client.get(
+                f"{API_BASE}/api/recordings/{recording_id}/download",
+                headers=api_key_header,
+                follow_redirects=True,
+            )
+            if res.status_code != 200:
+                return f"Failed to download recording: HTTP {res.status_code}"
+
+            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            tmp.write(res.content)
+            tmp.close()
+            tmp_video = tmp.name
+    except Exception as e:
+        return f"Error downloading recording: {e}"
+
+    try:
+        # 3. Get video duration using ffprobe
+        probe_cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", tmp_video,
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        duration = float(probe_result.stdout.strip()) if probe_result.stdout.strip() else 0
+
+        if duration <= 0:
+            return "Could not determine recording duration — file may be corrupted."
+
+        # 4. Extract evenly-spaced frames
+        frame_dir = tempfile.mkdtemp(prefix="falcon_frames_")
+        interval = duration / max_frames
+
+        extract_cmd = [
+            "ffmpeg", "-y", "-i", tmp_video,
+            "-vf", f"fps=1/{interval:.2f}",
+            "-frames:v", str(max_frames),
+            "-q:v", "2",
+            f"{frame_dir}/frame_%03d.jpg",
+        ]
+        subprocess.run(extract_cmd, capture_output=True, timeout=60)
+
+        frame_files = sorted(glob.glob(f"{frame_dir}/frame_*.jpg"))
+        if not frame_files:
+            return "Could not extract frames from recording."
+
+        # 5. Read frames and encode to base64
+        b64_images = []
+        for fpath in frame_files:
+            with open(fpath, "rb") as f:
+                b64_images.append(base64.b64encode(f.read()).decode())
+
+        # 6. Build vision prompt
+        default_prompt = (
+            f"These are {len(b64_images)} frame(s) extracted from a {duration:.0f}-second "
+            f"recording from camera '{camera_name}'. "
+            "Describe what you see in detail. Note any people, their actions, "
+            "objects, environment, activity, or anything unusual. "
+            "If multiple frames are provided, note any changes between them."
+        )
+        vision_prompt = f"{prompt}\n\n{default_prompt}" if prompt else default_prompt
+
+        # 7. Send to vision LLM
+        provider = agent_ctx.get("provider", "openai")
+        model = agent_ctx.get("model", "gpt-4o")
+        api_key = (
+            agent_ctx.get("api_key")
+            or os.getenv("ANTHROPIC_API_KEY", "")
+            or os.getenv("OPENAI_API_KEY", "")
+        )
+
+        try:
+            if provider == "anthropic":
+                description = await _vision_anthropic(api_key, model, b64_images, vision_prompt)
+            else:
+                base_url = (
+                    "https://api.openai.com/v1" if provider == "openai"
+                    else "http://ollama:11434/v1"
+                )
+                description = await _vision_openai(api_key, model, base_url, b64_images, vision_prompt)
+        except Exception as e:
+            logger.error(f"Vision API call failed for recording analysis: {e}")
+            return f"Vision API call failed: {e}"
+
+        return (
+            f"[Recording: {rec_name} | Camera: {camera_name} | "
+            f"Duration: {duration:.0f}s | Frames analyzed: {len(b64_images)}]\n{description}"
+        )
+
+    finally:
+        # Cleanup temp files
+        import shutil
+        if tmp_video and os.path.exists(tmp_video):
+            os.remove(tmp_video)
+        if 'frame_dir' in locals() and os.path.exists(frame_dir):
+            shutil.rmtree(frame_dir, ignore_errors=True)
+
+
 async def _vision_openai(api_key: str, model: str, base_url: str, b64_images: list[str], prompt: str) -> str:
     """Send images to an OpenAI-compatible vision endpoint.
     
@@ -1149,6 +1280,7 @@ HANDLER_MAP = {
     "app.tools.handlers.delegate_task": delegate_task,
     "app.tools.handlers.clone_agent": clone_agent,
     "app.tools.handlers.analyze_camera": analyze_camera,
+    "app.tools.handlers.analyze_recording": analyze_recording,
     "app.tools.handlers.create_cron_job": create_cron_job,
     "app.tools.handlers.list_cron_jobs": list_cron_jobs,
     "app.tools.handlers.delete_cron_job": delete_cron_job,
