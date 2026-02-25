@@ -23,7 +23,7 @@ class Agent(Base):
     # LLM Configuration
     provider = Column(String(50), nullable=False, default="openai")
     model = Column(String(100), nullable=False, default="gpt-4o")
-    api_key_ref = Column(String(100), nullable=True)
+    api_key_ref = Column(Text, nullable=True)
     system_prompt = Column(Text, nullable=True)
     temperature = Column(Float, default=0.7)
     max_tokens = Column(Integer, default=4096)
