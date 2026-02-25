@@ -237,8 +237,8 @@ async def monitor_ffmpeg_process(recording_id: str, log_path: str):
                     except Exception:
                         pass
 
-                if exit_code == 0 or (exit_code == -2 and not _stop_requested):
-                    # exit_code 0 = ffmpeg -t finished, -2 = SIGINT from our timer
+                if exit_code == 0 or (exit_code in (-2, 255) and not _stop_requested):
+                    # exit_code 0 = ffmpeg -t finished, -2/255 = SIGINT from our timer
                     logger.info("FFmpeg chunk finished for recording %s (exit=%d, elapsed=%.0fs)", recording_id, exit_code, elapsed)
                     await _finalize_chunk(recording_info)
 
