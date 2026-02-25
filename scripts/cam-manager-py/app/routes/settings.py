@@ -148,7 +148,7 @@ def _restart_all_pods():
         deployments = apps_api.list_namespaced_deployment(namespace=ns)
         for dep in deployments.items:
             name = dep.metadata.name
-            if name.startswith("falcon-eye-") or name.startswith("agent-"):
+            if name.startswith(("falcon-eye-", "agent-", "rec-", "cam-")):
                 try:
                     apps_api.patch_namespaced_deployment(name=name, namespace=ns, body=restart_patch)
                     restarted.append(name)
@@ -320,7 +320,7 @@ async def restart_all_deployments(background_tasks: BackgroundTasks):
         deps = apps_api.list_namespaced_deployment(namespace=settings.k8s_namespace)
         for dep in deps.items:
             n = dep.metadata.name
-            if n.startswith("falcon-eye-") or n.startswith("agent-") or n.startswith("cam-"):
+            if n.startswith(("falcon-eye-", "agent-", "rec-", "cam-")):
                 names.append(n)
     except ApiException:
         pass
