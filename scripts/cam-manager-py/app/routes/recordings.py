@@ -14,6 +14,8 @@ import tempfile
 import hashlib
 import httpx
 
+from app.services.settings_service import settings_service
+
 from app.database import get_db
 from app.config import get_settings
 from app.models.recording import Recording, RecordingStatus
@@ -99,11 +101,15 @@ async def _download_to_temp(recording) -> str | None:
         if recording.cloud_url:
             try:
                 import boto3
-                access_key = os.environ.get("CLOUD_STORAGE_ACCESS_KEY", "")
-                secret_key = os.environ.get("CLOUD_STORAGE_SECRET_KEY", "")
-                bucket = os.environ.get("CLOUD_STORAGE_BUCKET", "")
-                region = os.environ.get("CLOUD_STORAGE_REGION", "us-east-1")
-                endpoint = os.environ.get("CLOUD_STORAGE_ENDPOINT", "")
+                _cs = await settings_service.get_many([
+                    "CLOUD_STORAGE_ACCESS_KEY", "CLOUD_STORAGE_SECRET_KEY",
+                    "CLOUD_STORAGE_BUCKET", "CLOUD_STORAGE_REGION", "CLOUD_STORAGE_ENDPOINT",
+                ])
+                access_key = _cs["CLOUD_STORAGE_ACCESS_KEY"]
+                secret_key = _cs["CLOUD_STORAGE_SECRET_KEY"]
+                bucket = _cs["CLOUD_STORAGE_BUCKET"]
+                region = _cs.get("CLOUD_STORAGE_REGION") or "us-east-1"
+                endpoint = _cs["CLOUD_STORAGE_ENDPOINT"]
 
                 if access_key and secret_key and bucket:
                     s3_kwargs = {
@@ -161,12 +167,16 @@ async def _stream_from_cloud(recording: Recording):
     import boto3
     from botocore.exceptions import ClientError
 
-    provider = os.environ.get("CLOUD_STORAGE_PROVIDER", "spaces")
-    access_key = os.environ.get("CLOUD_STORAGE_ACCESS_KEY", "")
-    secret_key = os.environ.get("CLOUD_STORAGE_SECRET_KEY", "")
-    bucket = os.environ.get("CLOUD_STORAGE_BUCKET", "")
-    region = os.environ.get("CLOUD_STORAGE_REGION", "us-east-1")
-    endpoint = os.environ.get("CLOUD_STORAGE_ENDPOINT", "")
+    _cs = await settings_service.get_many([
+        "CLOUD_STORAGE_PROVIDER", "CLOUD_STORAGE_ACCESS_KEY", "CLOUD_STORAGE_SECRET_KEY",
+        "CLOUD_STORAGE_BUCKET", "CLOUD_STORAGE_REGION", "CLOUD_STORAGE_ENDPOINT",
+    ])
+    provider = _cs["CLOUD_STORAGE_PROVIDER"]
+    access_key = _cs["CLOUD_STORAGE_ACCESS_KEY"]
+    secret_key = _cs["CLOUD_STORAGE_SECRET_KEY"]
+    bucket = _cs["CLOUD_STORAGE_BUCKET"]
+    region = _cs.get("CLOUD_STORAGE_REGION") or "us-east-1"
+    endpoint = _cs["CLOUD_STORAGE_ENDPOINT"]
 
     if not access_key or not secret_key or not bucket:
         raise HTTPException(status_code=500, detail="Cloud storage not configured")
@@ -390,7 +400,7 @@ async def update_recording(
     # Trigger cloud upload if recording completed/stopped and cloud storage enabled
     if data.status in ("completed", "stopped"):
         try:
-            cloud_enabled = os.getenv("CLOUD_STORAGE_ENABLED", "false").lower() == "true"
+            cloud_enabled = (await settings_service.get("CLOUD_STORAGE_ENABLED", "false")).lower() == "true"
             redis_url = os.getenv("REDIS_URL", "")
             if cloud_enabled and redis_url:
                 from app.worker import upload_recording_to_cloud

@@ -10,6 +10,7 @@ from app.models.camera import Base
 from app.models.recording import Recording  # Import to register model
 from app.models.chat import ChatSession, ChatMessage  # Import to register models
 from app.models.agent import Agent, AgentChatMessage, CronJob  # Import to register models
+from app.models.settings import Setting  # Import to register model
 
 settings = get_settings()
 

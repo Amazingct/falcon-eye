@@ -17,6 +17,7 @@ from app.routes.files import router as files_router
 from app.routes.auth import router as auth_router
 from app.chatbot import router as chatbot_router
 from app.routes.queue import router as queue_router
+from app.routes.internal import router as internal_router
 from app.models.schemas import HealthResponse
 from app.auth import require_auth
 
@@ -29,6 +30,27 @@ async def lifespan(app: FastAPI):
     # Startup
     print(f"Starting {settings.app_name}...")
     await init_db()
+
+    # Initialize settings in DB (seed defaults + migrate from env/ConfigMap)
+    from app.services.settings_service import settings_service
+    import os
+    env_settings = {
+        k: os.environ[k]
+        for k in [
+            "RECORDING_CHUNK_MINUTES", "CLOUD_STORAGE_ENABLED",
+            "CLOUD_STORAGE_PROVIDER", "CLOUD_STORAGE_ACCESS_KEY",
+            "CLOUD_STORAGE_SECRET_KEY", "CLOUD_STORAGE_BUCKET",
+            "CLOUD_STORAGE_REGION", "CLOUD_STORAGE_ENDPOINT",
+            "CLOUD_DELETE_LOCAL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+            "DEFAULT_RESOLUTION", "DEFAULT_FRAMERATE",
+            "DEFAULT_CAMERA_NODE", "DEFAULT_RECORDER_NODE",
+            "CLEANUP_INTERVAL", "CREATING_TIMEOUT_MINUTES",
+        ]
+        if k in os.environ and os.environ[k]
+    }
+    if env_settings:
+        await settings_service.migrate_from_configmap(env_settings)
+
     # Ensure main agent exists
     from app.database import AsyncSessionLocal as async_session
     from app.routes.agents import ensure_main_agent
@@ -87,8 +109,9 @@ async def health_check():
     )
 
 
-# Auth router (public - no auth required)
+# Public routers (no auth required)
 app.include_router(auth_router)
+app.include_router(internal_router)
 
 # Protected routers - all require authentication
 app.include_router(cameras.router, dependencies=[Depends(require_auth)])

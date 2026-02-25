@@ -29,7 +29,27 @@ def _get_sync_db_url():
 
 
 def _get_cloud_settings():
-    """Read cloud settings from environment (populated via ConfigMap)."""
+    """Read cloud settings from the API's internal endpoint (DB-backed).
+    Falls back to env vars if the API is unreachable."""
+    import requests
+    api_url = os.getenv("API_URL", "http://falcon-eye-api:8000")
+    try:
+        resp = requests.get(f"{api_url}/api/internal/settings/recording", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "enabled": data.get("CLOUD_STORAGE_ENABLED", "false").lower() == "true",
+                "provider": data.get("CLOUD_STORAGE_PROVIDER", "spaces"),
+                "access_key": data.get("CLOUD_STORAGE_ACCESS_KEY", ""),
+                "secret_key": data.get("CLOUD_STORAGE_SECRET_KEY", ""),
+                "bucket": data.get("CLOUD_STORAGE_BUCKET", ""),
+                "region": data.get("CLOUD_STORAGE_REGION", ""),
+                "endpoint": data.get("CLOUD_STORAGE_ENDPOINT", ""),
+                "delete_local": data.get("CLOUD_DELETE_LOCAL", "true").lower() == "true",
+            }
+    except Exception as e:
+        logger.warning(f"Failed to fetch settings from API, falling back to env: {e}")
+    # Fallback to env vars
     return {
         "enabled": os.getenv("CLOUD_STORAGE_ENABLED", "false").lower() == "true",
         "provider": os.getenv("CLOUD_STORAGE_PROVIDER", "spaces"),

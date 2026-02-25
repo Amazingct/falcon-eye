@@ -281,7 +281,15 @@ async def cleanup_uploaded_local_files():
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
     from sqlalchemy import text
     
-    cloud_delete = os.getenv("CLOUD_DELETE_LOCAL", "true").lower() == "true"
+    # Fetch setting from API (DB-backed), fallback to env
+    try:
+        import httpx as _httpx
+        api_url = os.getenv("API_URL", "http://falcon-eye-api:8000")
+        async with _httpx.AsyncClient() as _c:
+            _resp = await _c.get(f"{api_url}/api/internal/settings/CLOUD_DELETE_LOCAL", timeout=5)
+            cloud_delete = _resp.json().get("value", "true").lower() == "true" if _resp.status_code == 200 else os.getenv("CLOUD_DELETE_LOCAL", "true").lower() == "true"
+    except Exception:
+        cloud_delete = os.getenv("CLOUD_DELETE_LOCAL", "true").lower() == "true"
     if not cloud_delete:
         logger.info("CLOUD_DELETE_LOCAL is false, skipping local cleanup")
         return
