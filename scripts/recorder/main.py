@@ -58,6 +58,11 @@ class RecordingInfo(BaseModel):
     status: str  # recording, stopped, idle
     
 
+class StartRequest(BaseModel):
+    """Start recording request"""
+    chunk_minutes: Optional[int] = None
+
+
 class StartResponse(BaseModel):
     """Start recording response"""
     success: bool
@@ -311,9 +316,14 @@ async def get_status() -> RecordingInfo:
 
 
 @app.post("/start")
-async def start_recording() -> StartResponse:
+async def start_recording(request: Optional[StartRequest] = None) -> StartResponse:
     """Start recording (chunked — each chunk is RECORDING_CHUNK_MINUTES long)"""
-    global current_process, current_recording, _monitor_task, _stop_requested
+    global current_process, current_recording, _monitor_task, _stop_requested, RECORDING_CHUNK_MINUTES
+
+    # Override chunk duration if provided by API
+    if request and request.chunk_minutes is not None:
+        RECORDING_CHUNK_MINUTES = max(1, min(60, request.chunk_minutes))
+        logger.info("Chunk duration set to %d minutes (from API)", RECORDING_CHUNK_MINUTES)
 
     async with recording_lock:
         if current_process and current_process.poll() is None:

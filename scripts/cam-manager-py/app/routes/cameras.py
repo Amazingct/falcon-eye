@@ -807,9 +807,17 @@ async def start_recording(
     if not is_ready:
         raise HTTPException(status_code=503, detail="Recorder service still deploying, please wait")
     
+    # Read chunk duration from settings DB
+    from app.services.settings_service import settings_service
+    chunk_minutes_str = await settings_service.get("RECORDING_CHUNK_MINUTES")
+    chunk_minutes = int(chunk_minutes_str) if chunk_minutes_str else 15
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.post(f"{recorder_url}/start")
+            res = await client.post(
+                f"{recorder_url}/start",
+                json={"chunk_minutes": chunk_minutes},
+            )
             if res.status_code == 200:
                 return res.json()
             raise HTTPException(status_code=res.status_code, detail=res.text)
