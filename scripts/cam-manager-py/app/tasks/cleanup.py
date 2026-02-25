@@ -382,11 +382,11 @@ async def cleanup_uploaded_local_files():
                 logger.warning(f"Failed to find recorder pods for {camera_id}: {e}")
             
             if not found_and_deleted:
-                # Recorder might be stopped — try file-server nodes as fallback (log only)
-                logger.warning(f"Could not delete {camera_id}/{file_name} — recorder not available")
+                # Recorder might be stopped — skip DB update, retry next cleanup cycle
+                logger.warning(f"Could not delete {camera_id}/{file_name} — recorder not available, will retry")
+                continue
             
-            # Even if remote delete didn't work, clear file_path in DB
-            # so the download route uses cloud_url instead
+            # Only clear file_path in DB after confirmed deletion
             await session.execute(
                 text("UPDATE recordings SET file_path = '' WHERE id = :id"),
                 {"id": rec_id},
