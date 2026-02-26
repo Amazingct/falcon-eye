@@ -867,19 +867,22 @@ async def analyze_recording(recording_id: str, prompt: str = "", max_frames: int
     tmp_video = None
     try:
         api_key_header = _INTERNAL_HEADERS.copy()
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         async with httpx.AsyncClient(timeout=300) as client:
-            res = await client.get(
+            async with client.stream(
+                "GET",
                 f"{API_BASE}/api/recordings/{recording_id}/download",
                 headers=api_key_header,
                 follow_redirects=True,
-            )
-            if res.status_code != 200:
-                return f"Failed to download recording: HTTP {res.status_code}"
-
-            tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-            tmp.write(res.content)
-            tmp.close()
-            tmp_video = tmp.name
+            ) as res:
+                if res.status_code != 200:
+                    tmp.close()
+                    os.remove(tmp.name)
+                    return f"Failed to download recording: HTTP {res.status_code}"
+                async for chunk in res.aiter_bytes(chunk_size=65536):
+                    tmp.write(chunk)
+        tmp.close()
+        tmp_video = tmp.name
     except Exception as e:
         return f"Error downloading recording: {e}"
 

@@ -69,7 +69,7 @@ def build_tools(
             if __ctx:
                 payload["agent_context"] = __ctx
             _headers = {"X-Internal-Key": INTERNAL_API_KEY} if INTERNAL_API_KEY else {}
-            async with httpx.AsyncClient(base_url=base, timeout=60, headers=_headers) as client:
+            async with httpx.AsyncClient(base_url=base, timeout=300, headers=_headers) as client:
                 res = await client.post("/api/tools/execute", json=payload)
                 if res.status_code == 200:
                     data = res.json()
