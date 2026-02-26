@@ -898,18 +898,28 @@ async def analyze_recording(recording_id: str, prompt: str = "", max_frames: int
         if duration <= 0:
             return "Could not determine recording duration — file may be corrupted."
 
-        # 4. Extract evenly-spaced frames
+        # 4. Extract evenly-spaced frames using seek (fast, avoids full decode)
         frame_dir = tempfile.mkdtemp(prefix="falcon_frames_")
-        interval = duration / max_frames
+        interval = duration / (max_frames + 1)  # +1 to avoid exact end
 
-        extract_cmd = [
-            "ffmpeg", "-y", "-i", tmp_video,
-            "-vf", f"fps=1/{interval:.2f}",
-            "-frames:v", str(max_frames),
-            "-q:v", "2",
-            f"{frame_dir}/frame_%03d.jpg",
-        ]
-        subprocess.run(extract_cmd, capture_output=True, timeout=60)
+        for i in range(max_frames):
+            seek_time = interval * (i + 1)
+            if seek_time >= duration:
+                break
+            frame_path = f"{frame_dir}/frame_{i:03d}.jpg"
+            extract_cmd = [
+                "ffmpeg", "-y",
+                "-ss", f"{seek_time:.2f}",
+                "-i", tmp_video,
+                "-frames:v", "1",
+                "-q:v", "2",
+                frame_path,
+            ]
+            try:
+                subprocess.run(extract_cmd, capture_output=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Frame extraction timed out at {seek_time:.1f}s")
+                continue
 
         frame_files = sorted(glob.glob(f"{frame_dir}/frame_*.jpg"))
         if not frame_files:
